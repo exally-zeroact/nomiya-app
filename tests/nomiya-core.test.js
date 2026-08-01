@@ -1496,6 +1496,85 @@ describe("バックの決め方（円と％）と、よく出るボトル", () =
     expect(C.normalizeItem({ name: " ドンペリ ", price: "50,000" }).price).toBe(0); // 数字にできない値は0
     expect(C.normalizeItem({ name: "ドンペリ", price: 50000 }).kind).toBe("bottle");
   });
+
+  // ===== 並べ替え（設定のマスタで店が自分の順に並べる） =====
+  // 押すボタンの並びがこれで決まるので、順番は店の言うとおりにする。
+  describe("よく出るボトルの並べ替え", () => {
+    const ITEMS = [
+      { id: "i1", name: "モエ", price: 30000, kind: "bottle" },
+      { id: "i2", name: "ドンペリ白", price: 50000, kind: "bottle" },
+      { id: "i3", name: "鏡月", price: 6000, kind: "bottle" },
+    ];
+    it("並べ替えていない店は、今までどおり高い順のまま", () => {
+      expect(C.itemList(ITEMS).map((x) => x.name)).toEqual(["ドンペリ白", "モエ", "鏡月"]);
+      expect(C.normalizeItem({ name: "モエ" }).ord).toBe(0);
+    });
+    it("順番を決めたら、値段ではなくその順に出る", () => {
+      const list = C.itemList([
+        { id: "i1", name: "モエ", price: 30000, ord: 1 },
+        { id: "i2", name: "ドンペリ白", price: 50000, ord: 2 },
+        { id: "i3", name: "鏡月", price: 6000, ord: 3 },
+      ]);
+      expect(list.map((x) => x.name)).toEqual(["モエ", "ドンペリ白", "鏡月"]);
+    });
+    it("↑を押すと1つ上がり、全部に順番が振り直される", () => {
+      const moved = C.moveItem(ITEMS, "i1", -1); // モエ（2番目）を上へ
+      expect(C.itemList(moved).map((x) => x.name)).toEqual(["モエ", "ドンペリ白", "鏡月"]);
+      expect(C.itemList(moved).map((x) => x.ord)).toEqual([1, 2, 3]);
+      // 元の配列は書き換えない（保存に失敗しても画面と食い違わない）
+      expect(ITEMS[0].ord).toBe(undefined);
+    });
+    it("↓を押すと1つ下がる", () => {
+      const moved = C.moveItem(ITEMS, "i2", 1); // ドンペリ（1番目）を下へ
+      expect(C.itemList(moved).map((x) => x.name)).toEqual(["モエ", "ドンペリ白", "鏡月"]);
+    });
+    it("端では何も起きない・知らないIDでも壊れない", () => {
+      expect(C.itemList(C.moveItem(ITEMS, "i2", -1)).map((x) => x.name)).toEqual([
+        "ドンペリ白",
+        "モエ",
+        "鏡月",
+      ]);
+      expect(C.itemList(C.moveItem(ITEMS, "i3", 1)).map((x) => x.name)).toEqual([
+        "ドンペリ白",
+        "モエ",
+        "鏡月",
+      ]);
+      expect(C.itemList(C.moveItem(ITEMS, "xx", 1)).map((x) => x.name)).toEqual([
+        "ドンペリ白",
+        "モエ",
+        "鏡月",
+      ]);
+      expect(C.moveItem(null, "i1", 1)).toEqual([]);
+    });
+    it("名前が無い行を混ぜても、並べ替えで消えない", () => {
+      const raw = ITEMS.concat([{ id: "i9", name: "", price: 0 }]);
+      const moved = C.moveItem(raw, "i1", -1);
+      expect(moved.length).toBe(4);
+      expect(moved.filter((x) => x.id === "i9").length).toBe(1);
+    });
+    it("種類でしぼっても、決めた順のまま出る", () => {
+      const raw = [
+        { id: "i1", name: "モエ", price: 30000, kind: "bottle", ord: 3 },
+        { id: "i2", name: "ドンペリ白", price: 50000, kind: "bottle", ord: 1 },
+        { id: "i3", name: "角瓶", price: 8000, kind: "drink", ord: 2 },
+      ];
+      expect(C.itemList(raw, "bottle").map((x) => x.name)).toEqual(["ドンペリ白", "モエ"]);
+    });
+    it("新しく足す商品は一番下に付く（勝手に上へ割り込まない）", () => {
+      expect(C.nextItemOrd([])).toBe(1);
+      expect(C.nextItemOrd([{ ord: 1 }, { ord: 5 }, { ord: 2 }])).toBe(6);
+      expect(C.nextItemOrd(null)).toBe(1);
+      const list = C.itemList(
+        [
+          { id: "i1", name: "モエ", price: 30000, ord: 1 },
+          { id: "i2", name: "ドンペリ白", price: 50000, ord: 2 },
+          { id: "i3", name: "新入り", price: 99999, ord: 3 },
+        ],
+        ""
+      );
+      expect(list.map((x) => x.name)).toEqual(["モエ", "ドンペリ白", "新入り"]);
+    });
+  });
   it("期間のまとめで、％バックの売った金額も足される", () => {
     const st = C.normalizeStaff(
       { id: "s1", name: "あかり", backPct: { bottle: 10 } },
@@ -2025,5 +2104,422 @@ describe("歩合の元を税込か税抜で選べる", () => {
     // 11,000(税込10%) → 税抜10,000 → 10% = 1,000
     const d = C.payDay(st, w, { settings: { rateBase: "nuki", rate: 0.1 } });
     expect(d.commission).toBe(1000);
+  });
+});
+
+/* =====================================================================
+   ④ 締め方（人ごと）
+   日払い / 週払い(締め曜日) / 15日締め / 月末締め ＋「締めてから何日後に払う」
+   ここが狂うと払う日と額が狂うので、実際の日付で固定する。
+   ===================================================================== */
+describe("締め方（人ごと）", () => {
+  const mk = (o) => C.normalizeStaff(Object.assign({ id: "s1", name: "あかり" }, o));
+
+  it("何も決めていない人は今までどおり日払い・その日に渡す", () => {
+    const st = mk({});
+    expect(st.cycle).toBe("daily");
+    expect(st.payAfter).toBe(0);
+    expect(C.payPeriod(st, "2026-08-05")).toEqual({
+      cycle: "daily",
+      from: "2026-08-05",
+      to: "2026-08-05",
+      payYmd: "2026-08-05",
+    });
+  });
+
+  it("日払いで「3日後に払う」なら、支払日が3日ずれる", () => {
+    const p = C.payPeriod(mk({ payAfter: 3 }), "2026-08-05");
+    expect(p.payYmd).toBe("2026-08-08");
+  });
+
+  it("週払い：締め曜日までが1回分（締め曜日そのものは、その週に入る）", () => {
+    // 締め曜日＝日曜(0)。2026-08-05は水曜 → その週は 7/30(木)〜8/5? ではなく 8/2(日)締め
+    const st = mk({ cycle: "weekly", closeWday: 0 });
+    expect(C.weekday("2026-08-02")).toBe("日");
+    const p = C.payPeriod(st, "2026-07-30");
+    expect(p.to).toBe("2026-08-02"); // 次の日曜で締める
+    expect(p.from).toBe("2026-07-27"); // その7日前（月曜）から
+    expect(p.payYmd).toBe("2026-08-02");
+    // 締め曜日その日は、その週に入る（翌週送りにしない）
+    expect(C.payPeriod(st, "2026-08-02").to).toBe("2026-08-02");
+    // 翌日はもう次の週
+    expect(C.payPeriod(st, "2026-08-03").to).toBe("2026-08-09");
+  });
+
+  it("週払い：締め曜日を土曜にすると、区切りが変わる", () => {
+    const st = mk({ cycle: "weekly", closeWday: 6, payAfter: 2 });
+    expect(C.weekday("2026-08-01")).toBe("土");
+    const p = C.payPeriod(st, "2026-07-28");
+    expect(p).toEqual({
+      cycle: "weekly",
+      from: "2026-07-26",
+      to: "2026-08-01",
+      payYmd: "2026-08-03",
+    });
+  });
+
+  it("15日締め：16日〜翌15日でひと区切り", () => {
+    const st = mk({ cycle: "half", payAfter: 5 });
+    expect(C.payPeriod(st, "2026-08-20")).toEqual({
+      cycle: "half",
+      from: "2026-08-16",
+      to: "2026-09-15",
+      payYmd: "2026-09-20",
+    });
+    // 15日ちょうどは、前の区切りの最後の日
+    expect(C.payPeriod(st, "2026-08-15")).toEqual({
+      cycle: "half",
+      from: "2026-07-16",
+      to: "2026-08-15",
+      payYmd: "2026-08-20",
+    });
+    // 1日は前月16日から
+    expect(C.payPeriod(st, "2026-01-05").from).toBe("2025-12-16");
+  });
+
+  it("月末締め：1日〜末日。2月も30日の月もその月の末日で締める", () => {
+    const st = mk({ cycle: "monthly", payAfter: 10 });
+    expect(C.payPeriod(st, "2026-08-20")).toEqual({
+      cycle: "monthly",
+      from: "2026-08-01",
+      to: "2026-08-31",
+      payYmd: "2026-09-10",
+    });
+    expect(C.payPeriod(st, "2026-02-10").to).toBe("2026-02-28");
+    expect(C.payPeriod(mk({ cycle: "monthly" }), "2024-02-10").to).toBe("2024-02-29"); // うるう年
+    expect(C.payPeriod(st, "2026-09-01").to).toBe("2026-09-30");
+    // 末日締め＋0日後なら、締めたその日が支払日
+    expect(C.payPeriod(mk({ cycle: "monthly" }), "2026-08-20").payYmd).toBe("2026-08-31");
+  });
+
+  it("知らない締め方でも壊れない（日払い扱いに戻す）", () => {
+    const st = mk({ cycle: "yonaoshi" });
+    expect(st.cycle).toBe("daily");
+    expect(C.payPeriod(st, "2026-08-05").to).toBe("2026-08-05");
+    expect(C.payPeriod(st, "こわれた日付")).toBe(null);
+  });
+
+  it("締め曜日と支払日のずれは、変な値を入れても丸められる", () => {
+    expect(mk({ closeWday: 9 }).closeWday).toBe(0);
+    expect(mk({ closeWday: -1 }).closeWday).toBe(0);
+    expect(mk({ closeWday: "6" }).closeWday).toBe(6);
+    expect(mk({ payAfter: -5 }).payAfter).toBe(0);
+    expect(mk({ payAfter: 999 }).payAfter).toBe(60); // ふた月先までで止める
+    expect(mk({ payAfter: "7" }).payAfter).toBe(7);
+  });
+});
+
+describe("その日に払う人と、まとめて渡す", () => {
+  const staff = [
+    C.normalizeStaff({ id: "s1", name: "あかり", hourly: 1000, cycle: "half", payAfter: 5 }),
+    C.normalizeStaff({ id: "s2", name: "ゆい", hourly: 1000, cycle: "daily" }),
+  ];
+  // あかり＝8/16〜9/15締め・9/20払い。2日出勤（各5時間＝5,000円）
+  const works = [
+    C.normalizeWork({ id: "w1", ymd: "2026-08-20", staffId: "s1", inAt: "20:00", outAt: "01:00" }),
+    C.normalizeWork({ id: "w2", ymd: "2026-09-10", staffId: "s1", inAt: "20:00", outAt: "01:00" }),
+    C.normalizeWork({ id: "w3", ymd: "2026-09-20", staffId: "s2", inAt: "20:00", outAt: "01:00" }),
+  ];
+
+  it("支払日に当たる人だけ出て、額はその区切りの「これから渡す」分", () => {
+    const plan = C.payPlan(staff, works, [], "2026-09-20", {});
+    expect(plan.map((x) => x.staff.name)).toEqual(["あかり", "ゆい"]);
+    const a = plan[0];
+    expect(a.period.from).toBe("2026-08-16");
+    expect(a.period.to).toBe("2026-09-15");
+    expect(a.unpaid).toBe(10000); // 5,000×2日
+    expect(a.paid).toBe(0);
+    // 日払いのゆいは、その日ぶんだけ
+    expect(plan[1].unpaid).toBe(5000);
+  });
+
+  it("支払日でない日は、誰も出ない", () => {
+    expect(C.payPlan(staff, works, [], "2026-09-19", {}).length).toBe(0);
+  });
+
+  it("まとめて渡すと、その区切りの分だけ渡し済みになる（二重払いしない）", () => {
+    const next = C.markPaidRange(
+      works,
+      "s1",
+      "2026-08-16",
+      "2026-09-15",
+      "2026-09-20T10:00:00.000Z"
+    );
+    expect(next.filter((w) => w.paidAt).map((w) => w.id)).toEqual(["w1", "w2"]);
+    // 他の人の分と、区切りの外は触らない
+    expect(next.find((w) => w.id === "w3").paidAt).toBe(null);
+    // 元の配列は書き換えない
+    expect(works[0].paidAt).toBe(null);
+    // 渡したあとは「これから渡す」が0になる
+    const plan = C.payPlan(staff, next, [], "2026-09-20", {});
+    expect(plan[0].unpaid).toBe(0);
+    expect(plan[0].paid).toBe(10000);
+  });
+
+  it("もう渡した分は、押し直しても時刻が変わらない（上書きしない）", () => {
+    const one = C.markPaidRange(
+      works,
+      "s1",
+      "2026-08-16",
+      "2026-09-15",
+      "2026-09-20T10:00:00.000Z"
+    );
+    const two = C.markPaidRange(one, "s1", "2026-08-16", "2026-09-15", "2026-09-25T10:00:00.000Z");
+    expect(two.find((w) => w.id === "w1").paidAt).toBe("2026-09-20T10:00:00.000Z");
+  });
+
+  it("消した出勤は数えないし、渡し済みにもしない", () => {
+    const w = works.concat([
+      C.normalizeWork({
+        id: "w9",
+        ymd: "2026-09-01",
+        staffId: "s1",
+        inAt: "20:00",
+        outAt: "01:00",
+        deletedAt: "2026-09-02T00:00:00.000Z",
+      }),
+    ]);
+    const plan = C.payPlan(staff, w, [], "2026-09-20", {});
+    expect(plan[0].unpaid).toBe(10000);
+    const next = C.markPaidRange(w, "s1", "2026-08-16", "2026-09-15", "2026-09-20T10:00:00.000Z");
+    expect(next.find((x) => x.id === "w9").paidAt).toBe(null);
+  });
+});
+
+describe("締め方もクラウドに残る（新しいスマホでも同じ締め方）", () => {
+  it("行に出して読み戻しても、締め方・締め曜日・何日後が変わらない", () => {
+    const st = C.normalizeStaff(
+      { id: "s1", name: "ゆい", cycle: "weekly", closeWday: 6, payAfter: 2 },
+      "2026-08-01T00:00:00.000Z"
+    );
+    const row = C.staffToRow(st);
+    expect(row.close_wday).toBe(6);
+    expect(row.pay_after).toBe(2);
+    const back = C.staffFromRow(row);
+    expect(back.cycle).toBe("weekly");
+    expect(back.closeWday).toBe(6);
+    expect(back.payAfter).toBe(2);
+    expect(C.payPeriod(back, "2026-07-28").payYmd).toBe("2026-08-03");
+  });
+  it("古い行（列がまだ無い店）から読んでも壊れない", () => {
+    const back = C.staffFromRow({ sid: "s1", name: "あかり", cycle: "daily" });
+    expect(back.closeWday).toBe(0);
+    expect(back.payAfter).toBe(0);
+  });
+});
+
+/* =====================================================================
+   ⑤ グレー枠の残り
+   バックの元 / ツケの歩合 / 深夜割増 / 源泉 / 18歳未満の深夜
+   どれも「選べる・既定は今までどおり・止めない」。
+   ===================================================================== */
+describe("バックの元（税抜・サービス料抜き）", () => {
+  // ボトル11,000円ぶん売った人。バックは10%。
+  const st = C.normalizeStaff({ id: "s1", name: "あかり", backPct: { bottle: 10 } });
+  const w = C.normalizeWork({ ymd: "2026-08-01", staffId: "s1", amount: { bottle: 11000 } });
+
+  it("何も決めていなければ、今までどおり会計そのまま（税込）", () => {
+    expect(C.payDay(st, w, {}).backTotal).toBe(1100);
+    expect(C.payDay(st, w, { settings: { backBase: "komi" } }).backTotal).toBe(1100);
+  });
+  it("税抜を選ぶと、消費税を抜いてから掛ける", () => {
+    // 11,000(税込10%) → 税抜10,000 → 10% = 1,000
+    expect(C.payDay(st, w, { settings: { backBase: "nuki", rate: 0.1 } }).backTotal).toBe(1000);
+  });
+  it("サービス料も抜くを選ぶと、サービス料も抜いてから掛ける", () => {
+    // 11,000 → 税抜10,000 → サービス料10%を抜いて 9,090 → 10% = 909
+    const d = C.payDay(st, w, { settings: { backBase: "service", rate: 0.1, serviceRate: 10 } });
+    expect(d.backTotal).toBe(909);
+  });
+  it("押した銘柄（この銘柄だけ○%）も、同じ元で計算する", () => {
+    const cfg = {
+      backBase: "nuki",
+      rate: 0.1,
+      items: [{ id: "i1", name: "ドンペリ", price: 55000, kind: "bottle", pct: 20 }],
+    };
+    const w2 = C.normalizeWork({ ymd: "2026-08-01", staffId: "s1", picks: { i1: 1 } });
+    // 55,000 → 税抜50,000 → 20% = 10,000
+    expect(C.payDay(st, w2, { settings: cfg }).backTotal).toBe(10000);
+  });
+  it("円で決めているバックは、元を変えても動かない（本数×単価のまま）", () => {
+    const yen = C.normalizeStaff({ id: "s2", name: "ゆい", back: { bottle: 3000 } });
+    const w3 = C.normalizeWork({ ymd: "2026-08-01", staffId: "s2", count: { bottle: 2 } });
+    expect(C.payDay(yen, w3, { settings: { backBase: "nuki", rate: 0.1 } }).backTotal).toBe(6000);
+  });
+});
+
+describe("ツケが回収できるまで歩合を出さない（選べる）", () => {
+  const sales = [
+    C.normalizeSale(
+      { date: "2026-08-01", name: "田中", people: 2, amount: 8000, pay: "cash", staff: "あかり" },
+      "2026-08-01T00:00:00.000Z"
+    ),
+    C.normalizeSale(
+      { date: "2026-08-01", name: "佐藤", people: 2, amount: 12000, pay: "tsuke", staff: "あかり" },
+      "2026-08-01T00:00:00.000Z"
+    ),
+  ];
+  it("何も決めていなければ、今までどおりツケも歩合に入る", () => {
+    expect(C.salesByStaff(sales, "2026-08-01", "あかり")).toBe(20000);
+    expect(C.salesByStaff(sales, "2026-08-01", "あかり", { tsukeComm: "now" })).toBe(20000);
+  });
+  it("「回収できてから」を選ぶと、未回収のツケは歩合の元に入らない", () => {
+    expect(C.salesByStaff(sales, "2026-08-01", "あかり", { tsukeComm: "collected" })).toBe(8000);
+  });
+  it("回収した印（入金日）が付けば、そのぶんも歩合に入る", () => {
+    const paid = sales.map((s) =>
+      s.pay === "tsuke" ? Object.assign({}, s, { paidDate: "2026-08-20" }) : s
+    );
+    expect(C.salesByStaff(paid, "2026-08-01", "あかり", { tsukeComm: "collected" })).toBe(20000);
+  });
+  it("消した売上は、どちらの決め方でも数えない", () => {
+    const del = sales.map((s) => Object.assign({}, s, { deletedAt: "2026-08-02T00:00:00.000Z" }));
+    expect(C.salesByStaff(del, "2026-08-01", "あかり", { tsukeComm: "collected" })).toBe(0);
+  });
+  it("期間のまとめも、その決め方どおりの歩合になる", () => {
+    const st = C.normalizeStaff({ id: "s1", name: "あかり", rate: 10 });
+    const works = [C.normalizeWork({ ymd: "2026-08-01", staffId: "s1" })];
+    const now = C.paySummary(st, works, sales, "2026-08-01", "2026-08-31", {});
+    const later = C.paySummary(st, works, sales, "2026-08-01", "2026-08-31", {
+      settings: { tsukeComm: "collected" },
+    });
+    expect(now.commission).toBe(2000);
+    expect(later.commission).toBe(800);
+  });
+});
+
+describe("深夜割増（選べる・既定は付けない）", () => {
+  // 時給1,000円で 20:00〜01:00（5時間・うち22時以降が3時間）
+  const st = C.normalizeStaff({ id: "s1", name: "あかり", hourly: 1000 });
+  const w = C.normalizeWork({ ymd: "2026-08-01", staffId: "s1", inAt: "20:00", outAt: "01:00" });
+
+  it("既定では付かない（今までの金額が1円も変わらない）", () => {
+    const d = C.payDay(st, w, {});
+    expect(d.nightMinutes).toBe(180);
+    expect(d.nightAdd).toBe(0);
+    expect(d.gross).toBe(5000);
+  });
+  it("付けるを選ぶと、22時以降の分だけ割増が乗る", () => {
+    // 1,000円 × 3時間 × 25% = 750
+    const d = C.payDay(st, w, { settings: { nightPay: true } });
+    expect(d.nightAdd).toBe(750);
+    expect(d.gross).toBe(5750);
+  });
+  it("割増の率は店で変えられる（30%など）", () => {
+    expect(C.payDay(st, w, { settings: { nightPay: true, nightRate: 30 } }).nightAdd).toBe(900);
+  });
+  it("日給の人には付けない（時給が無いと1時間いくらが決まらない）", () => {
+    const day = C.normalizeStaff({ id: "s2", name: "ゆい", daily: 12000 });
+    const dw = C.normalizeWork({ ymd: "2026-08-01", staffId: "s2", inAt: "20:00", outAt: "01:00" });
+    const d = C.payDay(day, dw, { settings: { nightPay: true } });
+    expect(d.nightAdd).toBe(0);
+    expect(d.gross).toBe(12000);
+  });
+  it("深夜に入っていなければ0（18:00〜21:00）", () => {
+    const w2 = C.normalizeWork({ ymd: "2026-08-01", staffId: "s1", inAt: "18:00", outAt: "21:00" });
+    expect(C.payDay(st, w2, { settings: { nightPay: true } }).nightAdd).toBe(0);
+  });
+  it("期間のまとめにも割増が積まれる", () => {
+    const t = C.paySummary(st, [w], [], "2026-08-01", "2026-08-31", {
+      settings: { nightPay: true },
+    });
+    expect(t.nightAdd).toBe(750);
+    expect(t.net).toBe(5750);
+  });
+  it("割増を付けている店には、「足したか確かめて」の注意を出さない", () => {
+    const d = C.payDay(st, w, { settings: { nightPay: true } });
+    expect(C.payWarnings(st, w, d, { nightPaid: true }).join("")).not.toContain("深夜の割増");
+  });
+});
+
+describe("源泉（選べる・既定は引かない）", () => {
+  const contract = C.normalizeStaff({
+    id: "s1",
+    name: "あかり",
+    daily: 100000,
+    employ: "contract",
+  });
+  const employee = C.normalizeStaff({ id: "s2", name: "ゆい", daily: 100000, employ: "employee" });
+  const w1 = C.normalizeWork({ ymd: "2026-08-01", staffId: "s1" });
+  const w2 = C.normalizeWork({ ymd: "2026-08-01", staffId: "s2" });
+
+  it("既定では引かない（今までどおり）", () => {
+    const d = C.payDay(contract, w1, {});
+    expect(d.gensen).toBe(0);
+    expect(d.net).toBe(100000);
+  });
+  it("引くを選ぶと、業務委託の人から10.21%を引く", () => {
+    const d = C.payDay(contract, w1, { settings: { gensen: true } });
+    expect(d.gensen).toBe(10210);
+    expect(d.deduct).toBe(10210);
+    expect(d.net).toBe(89790);
+  });
+  it("雇用の人からは引かない（税額表が別なので、ここでは引かせない）", () => {
+    expect(C.payDay(employee, w2, { settings: { gensen: true } }).gensen).toBe(0);
+  });
+  it("率は店で変えられる", () => {
+    const d = C.payDay(contract, w1, { settings: { gensen: true, gensenRate: 20.42 } });
+    expect(d.gensen).toBe(20420);
+  });
+  it("罰金などより先に、支給から引く", () => {
+    const w3 = C.normalizeWork({ ymd: "2026-08-01", staffId: "s1", fine: 5000 });
+    const d = C.payDay(contract, w3, { settings: { gensen: true } });
+    expect(d.gensen).toBe(10210); // 罰金を引く前の支給から
+    expect(d.net).toBe(100000 - 10210 - 5000);
+  });
+  it("引いている店には、「源泉を確かめて」の注意を出さない", () => {
+    const d = C.payDay(contract, w1, { settings: { gensen: true } });
+    expect(C.payWarnings(contract, w1, d, { withholding: true }).join("")).not.toContain("源泉");
+  });
+  it("期間のまとめにも源泉が積まれる", () => {
+    const t = C.paySummary(contract, [w1], [], "2026-08-01", "2026-08-31", {
+      settings: { gensen: true },
+    });
+    expect(t.gensen).toBe(10210);
+    expect(t.net).toBe(89790);
+  });
+});
+
+describe("18歳未満の深夜（止めないで、黄色く出す）", () => {
+  const w = C.normalizeWork({ ymd: "2026-08-01", staffId: "s1", inAt: "20:00", outAt: "01:00" });
+  const mk = (birth) => C.normalizeStaff({ id: "s1", name: "みく", hourly: 1000, birth: birth });
+
+  it("年を数えられる（誕生日が来る前は1つ下）", () => {
+    expect(C.ageOn("2009-05-01", "2026-08-01")).toBe(17);
+    expect(C.ageOn("2008-08-01", "2026-08-01")).toBe(18); // 誕生日当日で18歳
+    expect(C.ageOn("2008-08-02", "2026-08-01")).toBe(17); // 前日はまだ17歳
+    expect(C.ageOn("", "2026-08-01")).toBe(null);
+    expect(C.ageOn("2009-05-01", "こわれた日付")).toBe(null);
+  });
+  it("18歳未満で22時以降があると、黄色い注意が出る", () => {
+    const st = mk("2009-05-01");
+    const warn = C.payWarnings(st, w, C.payDay(st, w, {}), { ymd: "2026-08-01" });
+    expect(warn.join("")).toContain("18歳未満");
+    expect(warn.join("")).toContain("22時");
+  });
+  it("18歳以上なら出ない／生年月日を入れていなくても出ない（勝手に決めつけない）", () => {
+    const ok = mk("2000-01-01");
+    const a = C.payWarnings(ok, w, C.payDay(ok, w, {}), { ymd: "2026-08-01" }).join("");
+    expect(a).not.toContain("18歳未満");
+    const none = mk("");
+    const b = C.payWarnings(none, w, C.payDay(none, w, {}), { ymd: "2026-08-01" }).join("");
+    expect(b).not.toContain("18歳未満");
+  });
+  it("18歳未満でも、22時前に上がっていれば出ない", () => {
+    const st = mk("2009-05-01");
+    const early = C.normalizeWork({
+      ymd: "2026-08-01",
+      staffId: "s1",
+      inAt: "18:00",
+      outAt: "21:30",
+    });
+    const t = C.payWarnings(st, early, C.payDay(st, early, {}), { ymd: "2026-08-01" }).join("");
+    expect(t).not.toContain("18歳未満");
+  });
+  it("生年月日はクラウドにも残る", () => {
+    const st = mk("2009-05-01");
+    expect(C.staffToRow(st).birth).toBe("2009-05-01");
+    expect(C.staffFromRow(C.staffToRow(st)).birth).toBe("2009-05-01");
+    expect(C.normalizeStaff({ name: "x", birth: "へんな値" }).birth).toBe("");
   });
 });

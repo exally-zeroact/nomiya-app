@@ -172,9 +172,22 @@
     return +ym.slice(0, 4) + "年" + +ym.slice(5, 7) + "月";
   }
   var WD = ["日", "月", "火", "水", "木", "金", "土"];
+  function _dateOf(iso) {
+    return new Date(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10));
+  }
   function weekday(iso) {
     if (!isIsoDate(iso)) return "";
-    return WD[new Date(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)).getDay()];
+    return WD[_dateOf(iso).getDay()];
+  }
+  function wdayNo(iso) {
+    return isIsoDate(iso) ? _dateOf(iso).getDay() : -1;
+  }
+  // '2026-08-31' の3日後 → '2026-09-03'（月またぎ・うるう年は Date に任せる）
+  function addDays(iso, n) {
+    if (!isIsoDate(iso)) return "";
+    var d = _dateOf(iso);
+    d.setDate(d.getDate() + Math.floor(Number(n) || 0));
+    return toIso(d);
   }
 
   /* ===================================================================
@@ -1122,10 +1135,12 @@
     { key: "employee", label: "雇用（時給・日給）" },
     { key: "contract", label: "業務委託（歩合）" },
   ];
+  // 締め方（人ごとに選ぶ）。店によって全部バラバラなので、決め打ちにしない。
   var PAY_CYCLES = [
     { key: "daily", label: "日払い" },
-    { key: "weekly", label: "週払い" },
-    { key: "monthly", label: "月払い" },
+    { key: "weekly", label: "週払い" }, // 締め曜日は staff.closeWday
+    { key: "half", label: "15日締め" }, // 16日〜翌15日
+    { key: "monthly", label: "月末締め" }, // 1日〜末日
   ];
 
   function _int(v) {
@@ -1178,6 +1193,14 @@
       })
         ? r.cycle
         : "daily",
+      // 週払いの締め曜日（0=日 … 6=土）。変な値は日曜に戻す。
+      closeWday: (function () {
+        var n = _int(r.closeWday);
+        return n >= 0 && n <= 6 ? n : 0;
+      })(),
+      // 締めてから何日後に払うか。0＝締めたその日。長すぎる値はふた月で止める。
+      payAfter: Math.max(0, Math.min(60, _int(r.payAfter))),
+      birth: isIsoDate(r.birth) ? r.birth : "", // 生年月日（任意）。18歳未満の深夜の注意に使う
       employ: r.employ === "contract" ? "contract" : "employee",
       cash: r.cash === false ? false : true, // 現金で渡すか（振込ならfalse）
       memo: String(r.memo == null ? "" : r.memo).trim(),
@@ -1277,6 +1300,32 @@
    *    ② その種類の率（シャンパン15%）
    *    ③ 無ければ 本数×単価（円で決めている種類）
    */
+  /**
+   * backBaseAmt(sold, cfg)
+   *  ％バックを掛ける「元」。店がどこまで抜くかを決める。
+   *    komi(既定)=会計そのまま / nuki=消費税を抜く / service=消費税もサービス料も抜く
+   *  何も決めていない店は今までどおり（1円も変わらない）。
+   */
+  function backBaseAmt(sold, cfg) {
+    var c = cfg || {};
+    var v = Math.floor(Number(sold) || 0);
+    if (c.backBase !== "nuki" && c.backBase !== "service") return v;
+    v = taxIncluded(v, c.rate).net;
+    if (c.backBase === "service") {
+      var sr = _num(c.serviceRate);
+      if (sr > 0) v = Math.floor(v / (1 + sr / 100));
+    }
+    return v;
+  }
+  /**
+   * ageOn(birth, ymd)  … その日の年齢。生年月日が無ければ null（決めつけない）
+   */
+  function ageOn(birth, ymd) {
+    if (!isIsoDate(birth) || !isIsoDate(ymd)) return null;
+    var a = +ymd.slice(0, 4) - +birth.slice(0, 4);
+    return ymd.slice(5) < birth.slice(5) ? a - 1 : a;
+  }
+
   function payDay(staff, work, opt) {
     var st = staff || {};
     var w = work || {};
@@ -1302,8 +1351,8 @@
       var p = picked[it.kind] || (picked[it.kind] = { n: 0, sold: 0, back: 0, ownPct: 0 });
       p.n += n;
       p.sold += it.price * n;
-      // 銘柄に率があればそれで、無ければ後で種類の率をかける
-      if (it.pct > 0) p.back += Math.floor((it.price * n * it.pct) / 100);
+      // 銘柄に率があればそれで、無ければ後で種類の率をかける（元は店の決め方に合わせる）
+      if (it.pct > 0) p.back += Math.floor((backBaseAmt(it.price * n, cfg) * it.pct) / 100);
       else p.ownPct += it.price * n; // 種類の率をかける対象として残す
     });
 
@@ -1323,7 +1372,7 @@
       if (used) {
         if (pct > 0) {
           // 銘柄の率で出した分＋（種類の率をかける分）
-          amount = p.back + Math.floor(((typed + p.ownPct) * pct) / 100);
+          amount = p.back + Math.floor((backBaseAmt(typed + p.ownPct, cfg) * pct) / 100);
         } else if (p.back > 0) {
           // 種類には率が無いが、銘柄に率がある（ドンペリだけバック、など）
           amount = p.back;
@@ -1350,7 +1399,15 @@
     // 歩合の元。店が「税抜」を選んでいれば、消費税を抜いてから掛ける。
     if (cfg.rateBase === "nuki") sales = taxIncluded(sales, cfg.rate).net;
     var comm = staffUses(st, "rate") ? Math.floor((sales * _num(st.rate)) / 100) : 0;
-    var earned = base + backTotal + comm;
+    // 深夜割増（選べる・既定は付けない）。22時以降の分だけ、時給に率を足して乗せる。
+    // 日給の人は「1時間いくら」が決まらないので付けない（注意だけ出す）。
+    var nightMin = nightMinutes(w.inAt, w.outAt);
+    var nightAdd = 0;
+    if (cfg.nightPay && !st.daily && _int(st.hourly) > 0) {
+      var nr = cfg.nightRate == null ? 25 : _num(cfg.nightRate);
+      nightAdd = Math.floor((_int(st.hourly) * (nightMin / 60) * nr) / 100);
+    }
+    var earned = base + nightAdd + backTotal + comm;
     // 最低保証は「保証と、計算した額の高い方」
     var guar = staffUses(st, "guarantee") ? _int(st.guarantee) : 0;
     var guaranteed = guar ? Math.max(guar, earned) : earned;
@@ -1358,11 +1415,20 @@
     var kousei = staffUses(st, "kousei") ? _int(st.kousei) : 0;
     var repay = staffUses(st, "repay") ? _int(w.repay) : 0;
     var lend = staffUses(st, "lend") ? _int(w.lend) : 0;
-    var deduct = fine + kousei + repay;
+    // 源泉（選べる・既定は引かない）。業務委託の人だけ、支給から先に引く。
+    // 雇用の人は税額表が別なので、ここでは引かせない（間違った額を黙って引かない）。
+    var gensen = 0;
+    if (cfg.gensen && st.employ === "contract" && guaranteed > 0) {
+      var gr = cfg.gensenRate == null ? 10.21 : _num(cfg.gensenRate);
+      gensen = Math.floor((guaranteed * gr) / 100);
+    }
+    var deduct = fine + kousei + repay + gensen;
     return {
       minutes: mins,
       hours: hours,
-      nightMinutes: nightMinutes(w.inAt, w.outAt),
+      nightMinutes: nightMin,
+      nightAdd: nightAdd,
+      gensen: gensen,
       base: base,
       backs: backs,
       backTotal: backTotal,
@@ -1382,11 +1448,14 @@
   }
 
   // 売上データから「その人の客の売上」を日ごとに拾う（売上の担当＝staff）
-  function salesByStaff(sales, ymd, staffName) {
+  function salesByStaff(sales, ymd, staffName, cfg) {
+    // ツケが回収できるまで歩合を出さない店は、入金の印が付くまで数に入れない。
+    var later = (cfg || {}).tsukeComm === "collected";
     var t = 0;
     (sales || []).filter(isAlive).forEach(function (s) {
       if (s.date !== ymd) return;
       if (String(s.staff || "") !== String(staffName || "")) return;
+      if (later && isUnpaidMethod(s.pay) && !s.paidDate) return;
       t += _int(s.amount);
     });
     return t;
@@ -1411,6 +1480,8 @@
       days: 0,
       minutes: 0,
       base: 0,
+      nightAdd: 0,
+      gensen: 0,
       backTotal: 0,
       commission: 0,
       gross: 0,
@@ -1438,13 +1509,15 @@
       })
       .forEach(function (w) {
         var d = payDay(staff, w, {
-          sales: salesByStaff(sales, w.ymd, staff.name),
+          sales: salesByStaff(sales, w.ymd, staff.name, o.settings),
           crew: crewByStaff(sales, w.ymd, staff.name),
           settings: o.settings,
         });
         t.days += 1;
         t.minutes += d.minutes;
         t.base += d.base;
+        t.nightAdd += d.nightAdd;
+        t.gensen += d.gensen;
         t.backTotal += d.backTotal;
         t.commission += d.commission;
         t.gross += d.gross;
@@ -1557,7 +1630,97 @@
     if (st.employ === "contract" && d.gross > 0 && !o.withholding) {
       out.push("業務委託の報酬です。源泉を引く相手かどうか、税理士に確かめてください。");
     }
+    // 18歳未満の深夜。生年月日を入れている人だけ見る（入れていなければ決めつけない）。
+    var age = ageOn(st.birth, o.ymd || (work || {}).ymd);
+    if (age !== null && age < 18 && d.nightMinutes > 0) {
+      out.push("18歳未満（" + age + "歳）です。22時〜翌5時は働かせられません（労働基準法61条）。");
+    }
     return out;
+  }
+
+  /**
+   * payPeriod(staff, ymd)
+   *  その人の締め方で、ymd が入る「1回分」の区切りを返す。
+   *    { cycle, from, to, payYmd }   to=締め日 / payYmd=渡す日
+   *  日払い＝その日1日。週払い＝締め曜日まで（締め曜日その日は、その週に入る）。
+   *  15日締め＝16日〜翌15日。月末締め＝1日〜末日。
+   */
+  function payPeriod(staff, ymd) {
+    if (!isIsoDate(ymd)) return null;
+    var st = staff || {};
+    var cycle = PAY_CYCLES.some(function (c) {
+      return c.key === st.cycle;
+    })
+      ? st.cycle
+      : "daily";
+    var from, to;
+    if (cycle === "weekly") {
+      // 締め曜日まで何日か。締め曜日その日なら 0 日＝その日で締める。
+      var add = (((_int(st.closeWday) - wdayNo(ymd)) % 7) + 7) % 7;
+      to = addDays(ymd, add);
+      from = addDays(to, -6);
+    } else if (cycle === "half") {
+      var day = +ymd.slice(8, 10);
+      var ym = ymOf(ymd);
+      if (day <= 15) {
+        from = shiftMonth(ym, -1) + "-16";
+        to = ym + "-15";
+      } else {
+        from = ym + "-16";
+        to = shiftMonth(ym, 1) + "-15";
+      }
+    } else if (cycle === "monthly") {
+      var r = rangeOfMonth(ymOf(ymd));
+      from = r.from;
+      to = r.to;
+    } else {
+      from = ymd;
+      to = ymd;
+    }
+    return { cycle: cycle, from: from, to: to, payYmd: addDays(to, _int(st.payAfter)) };
+  }
+
+  /**
+   * payPlan(staffList, works, sales, ymd, opt)
+   *  「その日に渡す人」だけを出す。額は、その区切りの“まだ渡していない分”。
+   *  渡す日から逆に数えて、ちょうどその日が締め日になる人だけを拾う
+   *  （区切りの途中の日を渡す日と間違えない）。
+   */
+  function payPlan(staffList, works, sales, ymd, opt) {
+    if (!isIsoDate(ymd)) return [];
+    var out = [];
+    aliveStaff(staffList).forEach(function (st) {
+      var close = addDays(ymd, -_int(st.payAfter));
+      var p = payPeriod(st, close);
+      if (!p || p.to !== close || p.payYmd !== ymd) return;
+      var t = paySummary(st, works, sales, p.from, p.to, opt);
+      if (!t.days) return; // その区切りに出勤が1日も無い人は出さない（渡す物が無い）
+      out.push({
+        staff: st,
+        period: p,
+        days: t.days,
+        net: t.net,
+        paid: t.paidNet,
+        unpaid: t.unpaidNet,
+      });
+    });
+    return out;
+  }
+
+  /**
+   * markPaidRange(works, staffId, from, to, now)
+   *  その区切りの分を「渡した」にする。まとめて渡したときに押す。
+   *  もう渡した分・他の人の分・消した分は触らない（二重払いを作らない）。
+   *  元の配列は書き換えない。
+   */
+  function markPaidRange(works, staffId, from, to, now) {
+    var iso = now || nowIso();
+    return (works || []).map(function (w) {
+      if (!w || w.deletedAt || w.staffId !== staffId || w.paidAt) return w;
+      if (from && w.ymd < from) return w;
+      if (to && w.ymd > to) return w;
+      return Object.assign({}, w, { paidAt: iso, updatedAt: iso });
+    });
   }
 
   /**
@@ -1575,6 +1738,8 @@
       kind: String(r.kind || "").trim() || "bottle",
       // この銘柄だけの率（ドンペリ20%など）。0なら種類の率をそのまま使う。
       pct: _num(r.pct),
+      // 店が決めた並び順。0＝まだ決めていない（今までどおり高い順に出す）。
+      ord: _int(r.ord),
     };
   }
   function itemList(items, kind) {
@@ -1584,8 +1749,49 @@
         return x.name && (!kind || x.kind === kind);
       })
       .sort(function (a, b) {
+        // 店が並べたならその順。決めていなければ今までどおり高い順。
+        if (a.ord !== b.ord) return a.ord - b.ord;
         return b.price - a.price;
       });
+  }
+  /**
+   * nextItemOrd(items)
+   *  新しく足す商品の並び順＝いま一番下の次。上へ勝手に割り込ませない。
+   */
+  function nextItemOrd(items) {
+    var max = 0;
+    (items || []).forEach(function (x) {
+      var o = _int((x || {}).ord);
+      if (o > max) max = o;
+    });
+    return max + 1;
+  }
+  /**
+   * moveItem(items, id, dir)
+   *  設定のマスタで ↑↓ を押したとき。dir<0=上へ / dir>0=下へ。
+   *  端では何もしない。名前が無い行（表示に出ない行）も消さずに持ったまま返す。
+   *  元の配列は書き換えない（保存に失敗したときに画面と食い違わないように）。
+   */
+  function moveItem(items, id, dir) {
+    var raw = (items || []).slice();
+    var shown = itemList(raw);
+    var i = -1;
+    shown.forEach(function (x, k) {
+      if (x.id === id) i = k;
+    });
+    var j = i + (dir < 0 ? -1 : 1);
+    if (i < 0 || j < 0 || j >= shown.length) return raw;
+    var tmp = shown[i];
+    shown[i] = shown[j];
+    shown[j] = tmp;
+    var ord = {};
+    shown.forEach(function (x, k) {
+      ord[x.id] = k + 1;
+    });
+    return raw.map(function (x) {
+      var key = (x || {}).id;
+      return key && ord[key] ? Object.assign({}, x, { ord: ord[key] }) : x;
+    });
   }
 
   function staffToRow(x) {
@@ -1602,6 +1808,9 @@
       guarantee: _int(x.guarantee),
       kousei: _int(x.kousei),
       cycle: _s(x.cycle),
+      birth: _date(x.birth),
+      close_wday: _int(x.closeWday),
+      pay_after: _int(x.payAfter),
       employ: _s(x.employ),
       cash: !!x.cash,
       memo: _s(x.memo),
@@ -1624,6 +1833,9 @@
         guarantee: r.guarantee,
         kousei: r.kousei,
         cycle: _s(r.cycle),
+        birth: _s(r.birth),
+        closeWday: r.close_wday,
+        payAfter: r.pay_after,
         employ: _s(r.employ),
         cash: r.cash,
         memo: _s(r.memo),
@@ -2104,6 +2316,13 @@
     staffUses: staffUses,
     EMPLOY_KINDS: EMPLOY_KINDS,
     PAY_CYCLES: PAY_CYCLES,
+    backBaseAmt: backBaseAmt,
+    ageOn: ageOn,
+    WDAYS: WD,
+    addDays: addDays,
+    payPeriod: payPeriod,
+    payPlan: payPlan,
+    markPaidRange: markPaidRange,
     normalizeStaff: normalizeStaff,
     normalizeWork: normalizeWork,
     workMinutes: workMinutes,
@@ -2123,6 +2342,8 @@
     aliveStaff: aliveStaff,
     normalizeItem: normalizeItem,
     itemList: itemList,
+    nextItemOrd: nextItemOrd,
+    moveItem: moveItem,
     buildInvoice: buildInvoice,
     paginate: paginate,
     ledgerPages: ledgerPages,
