@@ -1178,6 +1178,26 @@
     });
     return out;
   }
+  // 渡し方（どこから渡すか）。アプリが「日払いだから金庫から」と決めつけない。
+  //   register = レジから（その日の締めの出金に入る＝金庫の現金が減る）
+  //   hand     = 手元の現金（別で用意した金。レジは減らない）
+  //   bank     = 振込
+  var PAY_FROMS = [
+    { key: "register", label: "レジから" },
+    { key: "hand", label: "手元の現金" },
+    { key: "bank", label: "振込" },
+  ];
+  function payFromLabel(key) {
+    for (var i = 0; i < PAY_FROMS.length; i++) {
+      if (PAY_FROMS[i].key === key) return PAY_FROMS[i].label;
+    }
+    return PAY_FROMS[0].label;
+  }
+  // レジ（金庫）から出す人か。締めの出金に入れるかどうかは、ここだけを見る。
+  function fromRegister(staff) {
+    return !!staff && staff.payFrom === "register";
+  }
+
   var EMPLOY_KINDS = [
     { key: "employee", label: "雇用（時給・日給）" },
     { key: "contract", label: "業務委託（歩合）" },
@@ -1249,7 +1269,25 @@
       payAfter: Math.max(0, Math.min(60, _int(r.payAfter))),
       birth: isIsoDate(r.birth) ? r.birth : "", // 生年月日（任意）。18歳未満の深夜の注意に使う
       employ: r.employ === "contract" ? "contract" : "employee",
-      cash: r.cash === false ? false : true, // 現金で渡すか（振込ならfalse）
+      // 渡し方（レジから / 手元の現金 / 振込）。決めていない古いデータは、
+      // 振込の人なら bank、それ以外は register に寄せる（勝手に現金にしない）。
+      payFrom: (function () {
+        var v = String(r.payFrom || "");
+        if (
+          PAY_FROMS.some(function (x) {
+            return x.key === v;
+          })
+        )
+          return v;
+        return r.cash === false ? "bank" : "register";
+      })(),
+      // 現金かどうかは渡し方から決まる（2か所がバラバラにならないように）
+      cash: (function () {
+        var v = String(r.payFrom || "");
+        if (v === "bank") return false;
+        if (v === "register" || v === "hand") return true;
+        return r.cash === false ? false : true;
+      })(),
       memo: String(r.memo == null ? "" : r.memo).trim(),
       updatedAt: now || nowIso(),
       deletedAt: r.deletedAt || null,
@@ -1298,7 +1336,9 @@
       fine: _int(r.fine), // 罰金
       lend: _int(r.lend), // この日に前借りした
       repay: _int(r.repay), // この日に返した
-      paidAt: r.paidAt || null, // 日払いで渡した時刻（渡したら入る）
+      paidAt: r.paidAt || null, // 渡した時刻（渡したら入る）
+      // ★渡したその時の額。あとで決め方を直しても、渡した記録は動かさない。
+      paidAmount: _int(r.paidAmount),
       memo: String(r.memo == null ? "" : r.memo).trim(),
       updatedAt: now || nowIso(),
       deletedAt: r.deletedAt || null,
@@ -1760,14 +1800,77 @@
    *  もう渡した分・他の人の分・消した分は触らない（二重払いを作らない）。
    *  元の配列は書き換えない。
    */
-  function markPaidRange(works, staffId, from, to, now) {
+  function markPaidRange(works, staffId, from, to, now, amounts) {
     var iso = now || nowIso();
+    var amt = amounts || {};
     return (works || []).map(function (w) {
       if (!w || w.deletedAt || w.staffId !== staffId || w.paidAt) return w;
       if (from && w.ymd < from) return w;
       if (to && w.ymd > to) return w;
-      return Object.assign({}, w, { paidAt: iso, updatedAt: iso });
+      // 渡した額をその場で固める（渡した記録が、あとの設定変更で動かないように）
+      return Object.assign({}, w, {
+        paidAt: iso,
+        paidAmount: _int(amt[w.id]),
+        updatedAt: iso,
+      });
     });
+  }
+
+  /**
+   * payoutLog(staffList, works, sales, opt)
+   *  「いつ・誰に・いくら渡したか」。渡した日 × 人 でまとめて、新しい順に返す。
+   *  額は渡したときに固めた値（paidAmount）。古いデータで入っていなければ、
+   *  その日の計算から出す。opt.from / opt.to で渡した日を絞れる。
+   */
+  function payoutLog(staffList, works, sales, opt) {
+    var o = opt || {};
+    var byId = {};
+    (staffList || []).forEach(function (st) {
+      if (st && st.id) byId[st.id] = st;
+    });
+    var rows = {};
+    (works || []).forEach(function (w) {
+      if (!w || w.deletedAt || !w.paidAt) return;
+      var st = byId[w.staffId];
+      if (!st) return;
+      var ymd = String(w.paidAt).slice(0, 10);
+      if (o.from && ymd < o.from) return;
+      if (o.to && ymd > o.to) return;
+      var amount = _int(w.paidAmount);
+      if (!amount) {
+        amount = payDay(st, w, {
+          sales: salesByStaff(sales, w.ymd, st.name, o.settings),
+          crew: crewByStaff(sales, w.ymd, st.name),
+          settings: o.settings,
+        }).net;
+      }
+      var key = ymd + "|" + st.id;
+      var r =
+        rows[key] ||
+        (rows[key] = {
+          ymd: ymd,
+          staffId: st.id,
+          name: st.name,
+          cash: st.cash !== false,
+          payFrom: st.payFrom || "register",
+          amount: 0,
+          days: 0,
+          from: w.ymd,
+          to: w.ymd,
+        });
+      r.amount += amount;
+      r.days += 1;
+      if (w.ymd < r.from) r.from = w.ymd;
+      if (w.ymd > r.to) r.to = w.ymd;
+    });
+    return Object.keys(rows)
+      .map(function (k) {
+        return rows[k];
+      })
+      .sort(function (a, b) {
+        if (a.ymd !== b.ymd) return a.ymd < b.ymd ? 1 : -1; // 新しい順
+        return a.name < b.name ? -1 : 1;
+      });
   }
 
   /**
@@ -1860,6 +1963,7 @@
       pay_after: _int(x.payAfter),
       employ: _s(x.employ),
       cash: !!x.cash,
+      pay_from: _s(x.payFrom),
       memo: _s(x.memo),
       updated_at: _ts(x.updatedAt) || nowIso(),
       deleted_at: _ts(x.deletedAt),
@@ -1885,6 +1989,7 @@
         payAfter: r.pay_after,
         employ: _s(r.employ),
         cash: r.cash,
+        payFrom: _s(r.pay_from),
         memo: _s(r.memo),
         deletedAt: r.deleted_at || null,
       },
@@ -1906,6 +2011,7 @@
       lend: _int(x.lend),
       repay: _int(x.repay),
       paid_at: _ts(x.paidAt),
+      paid_amount: _int(x.paidAmount),
       memo: _s(x.memo),
       updated_at: _ts(x.updatedAt) || nowIso(),
       deleted_at: _ts(x.deletedAt),
@@ -1927,6 +2033,7 @@
         lend: r.lend,
         repay: r.repay,
         paidAt: r.paid_at || null,
+        paidAmount: r.paid_amount,
         memo: _s(r.memo),
         deletedAt: r.deleted_at || null,
       },
@@ -2367,6 +2474,9 @@
     staffUses: staffUses,
     EMPLOY_KINDS: EMPLOY_KINDS,
     PAY_CYCLES: PAY_CYCLES,
+    PAY_FROMS: PAY_FROMS,
+    payFromLabel: payFromLabel,
+    fromRegister: fromRegister,
     backBaseAmt: backBaseAmt,
     ageOn: ageOn,
     WDAYS: WD,
@@ -2374,6 +2484,7 @@
     payPeriod: payPeriod,
     payPlan: payPlan,
     markPaidRange: markPaidRange,
+    payoutLog: payoutLog,
     normalizeStaff: normalizeStaff,
     normalizeWork: normalizeWork,
     workMinutes: workMinutes,
