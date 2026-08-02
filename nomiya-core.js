@@ -1289,6 +1289,7 @@
         return r.cash === false ? false : true;
       })(),
       memo: String(r.memo == null ? "" : r.memo).trim(),
+      ord: _int(r.ord), // 店が決めた並び順（0＝まだ決めていない）
       updatedAt: now || nowIso(),
       deletedAt: r.deletedAt || null,
     };
@@ -1817,6 +1818,50 @@
   }
 
   /**
+   * unmarkPaid(works, staffId, paidYmd, now)
+   *  「渡した」を取り消す。その人・その渡した日の分だけ、印と固めた額を外す。
+   *  返り = { works: 新しい配列, workIds: 外した出勤のid }
+   *  （workIds は、締めの出金を一緒に外すために使う）
+   */
+  function unmarkPaid(works, staffId, paidYmd, now) {
+    var iso = now || nowIso();
+    var ids = [];
+    var next = (works || []).map(function (w) {
+      if (!w || w.deletedAt || w.staffId !== staffId) return w;
+      if (String(w.paidAt || "").slice(0, 10) !== paidYmd) return w;
+      ids.push(w.id);
+      return Object.assign({}, w, { paidAt: null, paidAmount: 0, updatedAt: iso });
+    });
+    return { works: next, workIds: ids };
+  }
+
+  /**
+   * removePayouts(closes, outIds, now)
+   *  締めの出金から、指定した印の行だけを外す。
+   *  出勤を消したとき・渡したのを取り消したときに、金庫から出た記録も一緒に消すため。
+   *  触らなかった日は、時刻も含めてそのまま返す。
+   */
+  function removePayouts(closes, outIds, now) {
+    var kill = {};
+    (outIds || []).forEach(function (id) {
+      if (id) kill[id] = true;
+    });
+    var src = closes || {};
+    var out = {};
+    Object.keys(src).forEach(function (ymd) {
+      var c = src[ymd] || {};
+      var outs = (c.outs || []).filter(function (o) {
+        return !kill[(o || {}).id];
+      });
+      out[ymd] =
+        outs.length === (c.outs || []).length
+          ? c
+          : normalizeClose(Object.assign({}, c, { outs: outs }), now);
+    });
+    return out;
+  }
+
+  /**
    * payoutLog(staffList, works, sales, opt)
    *  「いつ・誰に・いくら渡したか」。渡した日 × 人 でまとめて、新しい順に返す。
    *  額は渡したときに固めた値（paidAmount）。古いデータで入っていなければ、
@@ -1964,6 +2009,7 @@
       employ: _s(x.employ),
       cash: !!x.cash,
       pay_from: _s(x.payFrom),
+      ord: _int(x.ord),
       memo: _s(x.memo),
       updated_at: _ts(x.updatedAt) || nowIso(),
       deleted_at: _ts(x.deletedAt),
@@ -1990,6 +2036,7 @@
         employ: _s(r.employ),
         cash: r.cash,
         payFrom: _s(r.pay_from),
+        ord: r.ord,
         memo: _s(r.memo),
         deletedAt: r.deleted_at || null,
       },
@@ -2051,9 +2098,61 @@
     });
   }
   function aliveStaff(list) {
-    return (list || []).filter(function (x) {
-      return x && !x.deletedAt;
+    return (list || [])
+      .filter(function (x) {
+        return x && !x.deletedAt;
+      })
+      .sort(function (a, b) {
+        // 店が並べたならその順。決めていなければ入れた順のまま。
+        return _int(a.ord) - _int(b.ord);
+      });
+  }
+  /**
+   * moveStaff(list, id, dir)
+   *  設定の従業員で ↑↓ を押したとき。dir<0=上へ / dir>0=下へ。
+   *  端では何もしない。外した人は数に入れないが、消しもしない。
+   *  元の配列は書き換えない。
+   */
+  function moveStaff(list, id, dir) {
+    var raw = (list || []).slice();
+    var shown = aliveStaff(raw);
+    var i = -1;
+    shown.forEach(function (x, k) {
+      if (x.id === id) i = k;
     });
+    var j = i + (dir < 0 ? -1 : 1);
+    if (i < 0 || j < 0 || j >= shown.length) return raw;
+    var tmp = shown[i];
+    shown[i] = shown[j];
+    shown[j] = tmp;
+    var ord = {};
+    shown.forEach(function (x, k) {
+      ord[x.id] = k + 1;
+    });
+    return raw.map(function (x) {
+      var key = (x || {}).id;
+      return key && ord[key] ? Object.assign({}, x, { ord: ord[key] }) : x;
+    });
+  }
+  /**
+   * moveBackKind(settings, key, dir)
+   *  バックの種類の並べ替え。まだ決めていない店は、はじめの5つが入った状態から動かす。
+   *  返り = 新しい種類の配列（settings.backKinds に入れる）
+   */
+  function moveBackKind(settings, key, dir) {
+    var list = backKinds(settings).map(function (k) {
+      return { key: k.key, label: k.label };
+    });
+    var i = -1;
+    list.forEach(function (k, n) {
+      if (k.key === key) i = n;
+    });
+    var j = i + (dir < 0 ? -1 : 1);
+    if (i < 0 || j < 0 || j >= list.length) return list;
+    var tmp = list[i];
+    list[i] = list[j];
+    list[j] = tmp;
+    return list;
   }
 
   /* ===================================================================
@@ -2389,11 +2488,9 @@
     PAY_METHODS: PAY_METHODS,
     PAY_KEYS: PAY_KEYS,
     UNPAID_KEYS: UNPAID_KEYS,
-    RECEIPT_STATES: RECEIPT_STATES,
     normalizeReceipt: normalizeReceipt,
     isIssued: isIssued,
     isLater: isLater,
-    isNa: isNa,
     receiptChoices: receiptChoices,
     defaultReceipt: defaultReceipt,
     fixReceiptFor: fixReceiptFor,
@@ -2406,7 +2503,6 @@
     toIso: toIso,
     isIsoDate: isIsoDate,
     ymOf: ymOf,
-    daysInMonth: daysInMonth,
     rangeOfMonth: rangeOfMonth,
     shiftMonth: shiftMonth,
     mdShort: mdShort,
@@ -2416,7 +2512,6 @@
     comma: comma,
     yen: yen,
     num: _num,
-    int: _int,
     validateSale: validateSale,
     normalizeSale: normalizeSale,
     makeId: makeId,
@@ -2444,12 +2539,10 @@
     nextInvoiceSeq: nextInvoiceSeq,
     invoiceKey: invoiceKey,
     billableNames: billableNames,
-    alivePartners: alivePartners,
     saleToRow: saleToRow,
     saleFromRow: saleFromRow,
     partnerToRow: partnerToRow,
     partnerFromRow: partnerFromRow,
-    syncPlan: syncPlan,
     syncPlanSales: syncPlanSales,
     syncPlanPartners: syncPlanPartners,
     syncPlanSettings: syncPlanSettings,
@@ -2468,7 +2561,6 @@
     closeFromRow: closeFromRow,
     syncPlanCloses: syncPlanCloses,
     monthlyCash: monthlyCash,
-    BACK_KINDS: BACK_KINDS,
     backKinds: backKinds,
     PAY_ITEMS: PAY_ITEMS,
     staffUses: staffUses,
@@ -2480,11 +2572,12 @@
     backBaseAmt: backBaseAmt,
     ageOn: ageOn,
     WDAYS: WD,
-    addDays: addDays,
     payPeriod: payPeriod,
     payPlan: payPlan,
     markPaidRange: markPaidRange,
     payoutLog: payoutLog,
+    unmarkPaid: unmarkPaid,
+    removePayouts: removePayouts,
     normalizeStaff: normalizeStaff,
     normalizeWork: normalizeWork,
     workMinutes: workMinutes,
@@ -2502,6 +2595,8 @@
     syncPlanStaff: syncPlanStaff,
     syncPlanWorks: syncPlanWorks,
     aliveStaff: aliveStaff,
+    moveStaff: moveStaff,
+    moveBackKind: moveBackKind,
     normalizeItem: normalizeItem,
     itemList: itemList,
     nextItemOrd: nextItemOrd,

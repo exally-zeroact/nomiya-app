@@ -2828,3 +2828,174 @@ describe("渡し方（どこから渡すか）", () => {
     expect(C.staffFromRow({ sid: "s1", name: "x", cash: true }).payFrom).toBe("register");
   });
 });
+
+/* =====================================================================
+   ⑨ 渡す・消すのまわりの穴（お金が合わなくなる所）
+   ===================================================================== */
+describe("渡したのを取り消す・出金を外す", () => {
+  const w = (o) =>
+    C.normalizeWork(
+      Object.assign({ ymd: "2026-08-01", staffId: "s1", inAt: "20:00", outAt: "01:00" }, o),
+      "2026-08-01T00:00:00.000Z"
+    );
+
+  it("渡したのを取り消すと、印も固めた額も外れる", () => {
+    const works = [
+      w({ id: "w1", paidAt: "2026-08-31T05:00:00.000Z", paidAmount: 5000 }),
+      w({ id: "w2", ymd: "2026-08-02", paidAt: "2026-08-31T05:00:00.000Z", paidAmount: 7000 }),
+      w({ id: "w3", ymd: "2026-08-03" }), // まだ渡していない
+    ];
+    const r = C.unmarkPaid(works, "s1", "2026-08-31", "2026-09-01T00:00:00.000Z");
+    expect(r.workIds.sort()).toEqual(["w1", "w2"]);
+    expect(r.works.filter((x) => x.paidAt).length).toBe(0);
+    expect(r.works.map((x) => x.paidAmount)).toEqual([0, 0, 0]);
+    // 元の配列は書き換えない
+    expect(works[0].paidAt).toBe("2026-08-31T05:00:00.000Z");
+  });
+
+  it("別の人・別の日の分は触らない／消した出勤も触らない", () => {
+    const works = [
+      w({ id: "w1", paidAt: "2026-08-31T05:00:00.000Z", paidAmount: 5000 }),
+      w({ id: "w2", staffId: "s2", paidAt: "2026-08-31T05:00:00.000Z", paidAmount: 6000 }),
+      w({ id: "w3", paidAt: "2026-09-30T05:00:00.000Z", paidAmount: 7000 }),
+      w({
+        id: "w4",
+        paidAt: "2026-08-31T05:00:00.000Z",
+        paidAmount: 8000,
+        deletedAt: "2026-08-31T06:00:00.000Z",
+      }),
+    ];
+    const r = C.unmarkPaid(works, "s1", "2026-08-31", "2026-09-01T00:00:00.000Z");
+    expect(r.workIds).toEqual(["w1"]);
+    expect(r.works.find((x) => x.id === "w2").paidAmount).toBe(6000);
+    expect(r.works.find((x) => x.id === "w3").paidAmount).toBe(7000);
+    expect(r.works.find((x) => x.id === "w4").paidAmount).toBe(8000);
+  });
+
+  it("締めの出金を、印を指定して外せる（他の出金は残る）", () => {
+    const closes = {
+      "2026-08-31": C.normalizeClose(
+        {
+          ymd: "2026-08-31",
+          outs: [
+            { id: "pay_w1", kind: "pay", amount: 5000, staff: "あかり" },
+            { id: "pay_range_s1_2026-08-31", kind: "pay", amount: 12000, staff: "あかり" },
+            { id: "buy1", kind: "buy", amount: 3000, memo: "氷" },
+          ],
+        },
+        "2026-08-31T00:00:00.000Z"
+      ),
+      "2026-09-01": C.normalizeClose(
+        { ymd: "2026-09-01", outs: [{ id: "pay_w9", kind: "pay", amount: 1000 }] },
+        "2026-09-01T00:00:00.000Z"
+      ),
+    };
+    const next = C.removePayouts(
+      closes,
+      ["pay_w1", "pay_range_s1_2026-08-31"],
+      "2026-09-02T00:00:00.000Z"
+    );
+    expect(next["2026-08-31"].outs.map((o) => o.id)).toEqual(["buy1"]);
+    // 触っていない日はそのまま（時刻も変えない）
+    expect(next["2026-09-01"].outs.map((o) => o.id)).toEqual(["pay_w9"]);
+    expect(next["2026-09-01"].updatedAt).toBe("2026-09-01T00:00:00.000Z");
+    // 元は書き換えない
+    expect(closes["2026-08-31"].outs.length).toBe(3);
+  });
+
+  it("知らない印を渡しても何も起きない／空でも壊れない", () => {
+    const closes = {
+      "2026-08-31": C.normalizeClose(
+        { ymd: "2026-08-31", outs: [{ id: "buy1", kind: "buy", amount: 3000 }] },
+        "2026-08-31T00:00:00.000Z"
+      ),
+    };
+    expect(C.removePayouts(closes, ["pay_zzz"])["2026-08-31"].outs.length).toBe(1);
+    expect(C.removePayouts(closes, [])["2026-08-31"].outs.length).toBe(1);
+    expect(C.removePayouts(null, ["x"])).toEqual({});
+  });
+
+  it("取り消したら、渡した記録から消える", () => {
+    const st = C.normalizeStaff({ id: "s1", name: "あかり", hourly: 1000 });
+    const works = [w({ id: "w1", paidAt: "2026-08-31T05:00:00.000Z", paidAmount: 5000 })];
+    expect(C.payoutLog([st], works, [], {}).length).toBe(1);
+    const r = C.unmarkPaid(works, "s1", "2026-08-31", "2026-09-01T00:00:00.000Z");
+    expect(C.payoutLog([st], r.works, [], {}).length).toBe(0);
+  });
+});
+
+/* =====================================================================
+   ⑬ スタッフとバックの種類の並べ替え（人数が増えると押しにくい）
+   ===================================================================== */
+describe("スタッフの並べ替え", () => {
+  const mk = (id, name, ord) => C.normalizeStaff({ id: id, name: name, ord: ord });
+  const LIST = [mk("s1", "あかり"), mk("s2", "ゆい"), mk("s3", "みく")];
+
+  it("並べ替えていない店は、入れた順のまま", () => {
+    expect(C.aliveStaff(LIST).map((x) => x.name)).toEqual(["あかり", "ゆい", "みく"]);
+    expect(mk("s1", "x").ord).toBe(0);
+  });
+  it("順番を決めたら、その順で出る", () => {
+    const l = [mk("s1", "あかり", 3), mk("s2", "ゆい", 1), mk("s3", "みく", 2)];
+    expect(C.aliveStaff(l).map((x) => x.name)).toEqual(["ゆい", "みく", "あかり"]);
+  });
+  it("↑↓で動かせて、全員に順番が振り直される", () => {
+    const moved = C.moveStaff(LIST, "s3", -1);
+    expect(C.aliveStaff(moved).map((x) => x.name)).toEqual(["あかり", "みく", "ゆい"]);
+    expect(C.aliveStaff(moved).map((x) => x.ord)).toEqual([1, 2, 3]);
+    expect(LIST[0].ord).toBe(0); // 元は書き換えない
+    expect(C.aliveStaff(C.moveStaff(LIST, "s1", 1)).map((x) => x.name)).toEqual([
+      "ゆい",
+      "あかり",
+      "みく",
+    ]);
+  });
+  it("端では動かない・知らないIDでも壊れない・外した人は数に入れない", () => {
+    expect(C.aliveStaff(C.moveStaff(LIST, "s1", -1)).map((x) => x.name)).toEqual([
+      "あかり",
+      "ゆい",
+      "みく",
+    ]);
+    expect(C.aliveStaff(C.moveStaff(LIST, "s3", 1)).map((x) => x.name)).toEqual([
+      "あかり",
+      "ゆい",
+      "みく",
+    ]);
+    expect(C.moveStaff(LIST, "zz", 1).length).toBe(3);
+    expect(C.moveStaff(null, "s1", 1)).toEqual([]);
+    const withDead = LIST.concat([
+      C.normalizeStaff({ id: "s9", name: "外した人", deletedAt: "2026-08-01T00:00:00.000Z" }),
+    ]);
+    expect(C.moveStaff(withDead, "s3", -1).length).toBe(4);
+  });
+  it("並び順もクラウドに残る", () => {
+    const row = C.staffToRow(mk("s1", "あかり", 2));
+    expect(row.ord).toBe(2);
+    expect(C.staffFromRow(row).ord).toBe(2);
+    expect(C.staffFromRow({ sid: "s1", name: "x" }).ord).toBe(0);
+  });
+});
+
+describe("バックの種類の並べ替え", () => {
+  const cfg = {
+    backKinds: [
+      { key: "a", label: "本指名" },
+      { key: "b", label: "同伴" },
+      { key: "c", label: "ボトル" },
+    ],
+  };
+  it("↑↓で入れ替わる", () => {
+    expect(C.moveBackKind(cfg, "c", -1).map((x) => x.label)).toEqual(["本指名", "ボトル", "同伴"]);
+    expect(C.moveBackKind(cfg, "a", 1).map((x) => x.label)).toEqual(["同伴", "本指名", "ボトル"]);
+  });
+  it("端では動かない・知らないキーでも壊れない", () => {
+    expect(C.moveBackKind(cfg, "a", -1).map((x) => x.key)).toEqual(["a", "b", "c"]);
+    expect(C.moveBackKind(cfg, "c", 1).map((x) => x.key)).toEqual(["a", "b", "c"]);
+    expect(C.moveBackKind(cfg, "zz", 1).map((x) => x.key)).toEqual(["a", "b", "c"]);
+  });
+  it("まだ決めていない店は、はじめの5つが入った状態から動かせる", () => {
+    const moved = C.moveBackKind({}, "douhan", -1);
+    expect(moved.length).toBe(5);
+    expect(moved.map((x) => x.key).slice(0, 3)).toEqual(["shimei", "douhan", "jonai"]);
+  });
+});
