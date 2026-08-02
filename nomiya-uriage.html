@@ -33,7 +33,7 @@
       body {
         font-family: "Noto Sans JP", sans-serif;
         background: #f0faf4;
-        color: #2E7D54;
+        color: #2e7d54;
         padding-bottom: calc(72px + env(safe-area-inset-bottom));
       }
 
@@ -105,7 +105,7 @@
       .scr-title {
         font-size: 16px;
         font-weight: 700;
-        color: #2E7D54;
+        color: #2e7d54;
         margin-bottom: 4px;
       }
       .scr-sub {
@@ -156,7 +156,7 @@
         border-radius: 10px;
         font-size: 15px;
         font-family: "Noto Sans JP", sans-serif;
-        color: #2E7D54;
+        color: #2e7d54;
         outline: none;
         background: #ffffff;
         transition: border-color 0.15s;
@@ -329,7 +329,7 @@
         text-align: center;
         font-size: 14px;
         font-weight: 700;
-        color: #2E7D54;
+        color: #2e7d54;
         font-family: "DM Mono", monospace;
       }
       .period-sub {
@@ -363,7 +363,7 @@
         font-family: "DM Mono", monospace;
         font-size: 16px;
         font-weight: 500;
-        color: #2E7D54;
+        color: #2e7d54;
       }
       .stat-grid {
         display: grid;
@@ -387,7 +387,7 @@
         font-family: "DM Mono", monospace;
         font-size: 22px;
         font-weight: 500;
-        color: #2E7D54;
+        color: #2e7d54;
         line-height: 1.2;
       }
       .stat-v small {
@@ -426,7 +426,7 @@
         text-align: left;
         font-family: "Noto Sans JP", sans-serif;
         font-weight: 700;
-        color: #2E7D54;
+        color: #2e7d54;
         white-space: normal;
         word-break: break-all;
       }
@@ -486,7 +486,7 @@
       .li-nm {
         font-size: 14px;
         font-weight: 700;
-        color: #2E7D54;
+        color: #2e7d54;
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -499,7 +499,7 @@
       .li-amt {
         font-family: "DM Mono", monospace;
         font-size: 15px;
-        color: #2E7D54;
+        color: #2e7d54;
         white-space: nowrap;
       }
       /* 並べ替えの ↑↓（設定のマスタだけ）。押す所は指のサイズにする。 */
@@ -543,7 +543,7 @@
       .sum-tbl td {
         font-family: "DM Mono", monospace;
         font-size: 13px;
-        color: #2E7D54;
+        color: #2e7d54;
         text-align: right;
         padding: 5px 6px;
         border-top: 1px solid #eef2f0;
@@ -604,7 +604,7 @@
       .ug-t {
         font-size: 12px;
         font-weight: 700;
-        color: #2E7D54;
+        color: #2e7d54;
       }
       .ug-c {
         font-size: 11px;
@@ -710,7 +710,7 @@
       .modal-title {
         font-size: 15px;
         font-weight: 700;
-        color: #2E7D54;
+        color: #2e7d54;
       }
       .modal-x {
         background: none;
@@ -729,7 +729,7 @@
         bottom: 86px;
         left: 50%;
         transform: translateX(-50%) translateY(10px);
-        background: #2E7D54;
+        background: #2e7d54;
         color: #ffffff;
         font-size: 12.5px;
         font-weight: 700;
@@ -780,7 +780,7 @@
         margin: 0 6px 6px 0;
         font-size: 13px;
         font-weight: 700;
-        color: #2E7D54;
+        color: #2e7d54;
       }
       .picked-it b {
         display: inline-flex;
@@ -1126,6 +1126,7 @@
         <div class="frow">
           <span class="flabel">支払い方法</span>
           <div class="chips" id="payChips"></div>
+          <span class="hint">電子決済＝PayPay・楽天ペイ・交通系など</span>
         </div>
 
         <div class="frow">
@@ -1179,8 +1180,20 @@
             <button class="chip chip-sm on" type="button" data-rec="all">すべて</button>
             <button class="chip chip-sm" type="button" data-rec="yes">あり</button>
             <button class="chip chip-sm" type="button" data-rec="no">なし</button>
+            <button class="chip chip-sm" type="button" data-rec="adj">調整</button>
             <button class="chip chip-sm" type="button" data-rec="later">あとで渡す分</button>
           </div>
+        </div>
+
+        <!-- 調整＝領収書なしの中から、どれを「あり」側に足すかを1件ずつ自分で選ぶ。
+             選ぶのは人。アプリは選ばれた分を覚えて合計を出すだけ。 -->
+        <div class="card" id="adjBox" style="display: none">
+          <div class="card-label">調整に入れる分を選ぶ</div>
+          <div class="hint" style="margin-bottom: 8px">
+            領収書なしの売上を押すと、上の帳簿と紙に足されます。もう一度押すと外れます。
+          </div>
+          <div id="adjSum"></div>
+          <div id="adjPick"></div>
         </div>
 
         <div class="strip" id="listStrip"></div>
@@ -1201,6 +1214,7 @@
           <button class="chip chip-sm on" type="button" data-srec="all">全体</button>
           <button class="chip chip-sm" type="button" data-srec="yes">領収書あり</button>
           <button class="chip chip-sm" type="button" data-srec="no">領収書なし</button>
+          <button class="chip chip-sm" type="button" data-srec="adj">調整</button>
         </div>
         <div class="strip" id="sumStrip"></div>
 
@@ -1230,6 +1244,7 @@
             <button class="chip chip-sm on" type="button" data-trec="all">全体</button>
             <button class="chip chip-sm" type="button" data-trec="yes">領収書あり</button>
             <button class="chip chip-sm" type="button" data-trec="no">領収書なし</button>
+            <button class="chip chip-sm" type="button" data-trec="adj">調整</button>
           </div>
         </div>
 
@@ -2957,21 +2972,85 @@
         $("listSheets").innerHTML = ledgerSheetsHtml(rows);
         bindSheetRows($("listSheets"));
         fitSheets("listScale", "listSheets");
+        renderAdjPick();
       }
 
-      function filterCaption() {
-        var p = UI.filPay === "all" ? "すべての支払い" : C.payLabel(UI.filPay);
-        var r =
-          UI.filRec === "all"
-            ? "領収書あり・なし両方"
-            : UI.filRec === "yes"
-              ? "領収書あり"
-              : UI.filRec === "later"
-                ? "領収書はあとで渡す分"
-                : UI.filRec === "na"
-                  ? "振込・カードの分"
-                  : "領収書なし";
-        return p + " / " + r;
+      /* 調整＝領収書なしの中から、どれを足すかを1件ずつ自分で選ぶ。
+         いくら足しているかを必ず見せる（何を出しているか分からんまま印刷させない）。 */
+      function renderAdjPick() {
+        var box = $("adjBox");
+        box.style.display = UI.filRec === "adj" ? "" : "none";
+        if (UI.filRec !== "adj") return;
+        var r = periodRange();
+        var inPeriod = C.filterSales(SALES, { from: r.from, to: r.to, pay: UI.filPay });
+        var t = C.adjTotals(inPeriod);
+        $("adjSum").innerHTML =
+          '<table class="sum-tbl"><tbody>' +
+          '<tr><td style="text-align:left">領収書あり</td><td>' +
+          t.yes.count +
+          "件</td><td>" +
+          C.comma(t.yes.amount) +
+          "</td></tr>" +
+          '<tr><td style="text-align:left">＋ 選んだ分</td><td>' +
+          t.picked.count +
+          "件</td><td>" +
+          C.comma(t.picked.amount) +
+          "</td></tr>" +
+          '<tr><td style="text-align:left"><b>合わせて</b></td><td></td><td><b>' +
+          C.comma(t.total) +
+          "</b></td></tr>" +
+          '<tr><td style="text-align:left">残り</td><td>' +
+          t.rest.count +
+          "件</td><td>" +
+          C.comma(t.rest.amount) +
+          "</td></tr></tbody></table>";
+
+        var cand = C.sortSales(
+          inPeriod.filter(function (s) {
+            return C.canAdj(s);
+          })
+        );
+        $("adjPick").innerHTML = cand.length
+          ? cand
+              .map(function (s) {
+                return (
+                  '<div class="li" data-adj="' +
+                  esc(s.id) +
+                  '"><div class="li-main"><div class="li-nm">' +
+                  (s.adj ? "☑ " : "☐ ") +
+                  esc(s.name || "（名前なし）") +
+                  '</div><div class="li-sub">' +
+                  esc(C.mdShort(s.date)) +
+                  "（" +
+                  esc(C.weekday(s.date)) +
+                  "）　" +
+                  esc(C.payLabel(s.pay)) +
+                  "　" +
+                  s.people +
+                  '人</div></div><div class="li-amt">' +
+                  C.yen(s.amount) +
+                  "</div></div>"
+                );
+              })
+              .join("")
+          : '<div class="empty">この期間に、領収書なしの売上はありません。</div>';
+        $("adjPick")
+          .querySelectorAll("[data-adj]")
+          .forEach(function (el) {
+            el.onclick = function () {
+              var id = el.getAttribute("data-adj");
+              var i = SALES.findIndex(function (x) {
+                return x.id === id;
+              });
+              if (i < 0) return;
+              SALES[i] = Object.assign({}, SALES[i], {
+                adj: !SALES[i].adj,
+                updatedAt: new Date().toISOString(),
+              });
+              saveSales();
+              renderAll();
+            };
+          });
       }
 
       // 売上帳のA4（複数ページ）
@@ -2988,10 +3067,9 @@
             esc(SETTINGS.store || "（店名は設定で入れられます）") +
             "</div>" +
             '<div class="sh-title">売 上 帳</div>' +
+            // ★紙に「どう絞り込んだか」は刷らない（司さん指示）。期間とページだけ。
             '<div class="sh-meta"><span>' +
             esc(periodLabel()) +
-            "</span><span>" +
-            esc(filterCaption()) +
             "</span><span>" +
             (p + 1) +
             " / " +
@@ -3035,15 +3113,14 @@
                   ? '<span class="c-paid">済</span>'
                   : '<span class="c-un">未</span>'
                 : "") +
-              '</td><td class="c-r">' +
-              esc(C.receiptMark(s.receipt)) +
+              // ★領収書の列は紙に出さない（司さん指示・2026-08-02）
               '</td><td class="c-bk">' +
               esc(s.memo || "") +
               "</td></tr>";
           } else {
             body +=
               '<tr class="blank"><td class="c-d"></td><td class="c-w"></td><td class="c-n"></td>' +
-              '<td class="c-p"></td><td class="c-a"></td><td class="c-m"></td><td class="c-r"></td>' +
+              '<td class="c-p"></td><td class="c-a"></td><td class="c-m"></td>' +
               '<td class="c-bk"></td></tr>';
           }
         }
@@ -3051,7 +3128,7 @@
           '<table class="sh-tbl"><thead><tr>' +
           '<th class="c-d">日付</th><th class="c-w">曜</th><th class="c-n">名前</th>' +
           '<th class="c-p">人数</th><th class="c-a">金額</th><th class="c-m">支払方法</th>' +
-          '<th class="c-r">領収書</th><th class="c-bk">備考</th>' +
+          '<th class="c-bk">備考</th>' +
           "</tr></thead><tbody>" +
           body +
           "</tbody></table>"
@@ -3061,6 +3138,7 @@
       function ledgerFootHtml(rows, total) {
         var pays = C.byPayMethod(rows);
         var recs = C.byReceipt(rows);
+        var showRec = UI.filRec === "all";
         var payHtml = pays
           .map(function (m) {
             return (
@@ -3102,8 +3180,12 @@
           '<div class="fb"><div class="fb-h">支払い方法別</div>' +
           payHtml +
           "</div>" +
-          '<div class="fb"><div class="fb-h">領収書</div>' +
-          recHtml +
+          // ★領収書 あり/なし の内訳は「すべて」で見ているときだけ出す（司さん指示）。
+          //   絞って出した紙には載せない。客単価・1組平均はどちらでも出す。
+          '<div class="fb"><div class="fb-h">' +
+          (showRec ? "領収書" : "平均") +
+          "</div>" +
+          (showRec ? recHtml : "") +
           '<div class="fb-note">客単価 ¥' +
           C.comma(total.perPerson) +
           " / 1組平均 ¥" +
@@ -3130,12 +3212,6 @@
       function sumScopeRows() {
         var r = periodRange();
         return C.sortSales(C.filterSales(SALES, { from: r.from, to: r.to, receipt: UI.sumRec }));
-      }
-      function scopeLabel(rec) {
-        if (rec === "yes") return "領収書あり分のみ";
-        if (rec === "no") return "領収書なし分のみ";
-        if (rec === "na") return "振込・カードの分";
-        return "全体";
       }
 
       function renderSum() {
@@ -3505,6 +3581,7 @@
           '</div><div class="sh-title">売 上 報 告 書</div>' +
           '<div class="sh-meta"><span>' +
           esc(periodLabel()) +
+          // ★紙に「どう絞り込んだか」は刷らない（司さん指示）
           "</span></div></div>" +
           '<div class="sm-stats">' +
           '<div class="sm-s"><span>売上（税込）</span><b>¥' +
@@ -4188,7 +4265,6 @@
         ".pay-tbl .c-p{width:44px;text-align:right;font-family:'DM Mono',monospace;}",
         ".pay-tbl .c-a{width:74px;text-align:right;font-family:'DM Mono',monospace;}",
         ".pay-tbl tfoot td{border-top:2px solid #2E7D54;}",
-        ".sh-tbl .c-r{width:46px;text-align:center;}",
         ".sh-tbl .c-bk{text-align:left;font-size:11px;color:#333333;}",
         ".sh-tbl .c-un{color:#b06d17;font-size:10px;margin-left:3px;}",
         ".sh-tbl .c-paid{color:#2f7d5a;font-size:10px;margin-left:3px;}",
@@ -4849,7 +4925,7 @@
           '<table class="sum-tbl"><tbody>' +
           [
             ["クレジット", o.credit],
-            ["PayPay", o.paypay],
+            ["電子決済", o.paypay],
             ["請求書送り", o.invoice],
             ["ツケ（この日の分）", o.tsuke],
           ]
@@ -5021,7 +5097,7 @@
           '<tr><td>クレジット</td><td></td><td class="c-a">' +
           C.comma(d.other.credit) +
           "</td></tr>" +
-          '<tr><td>PayPay</td><td></td><td class="c-a">' +
+          '<tr><td>電子決済</td><td></td><td class="c-a">' +
           C.comma(d.other.paypay) +
           "</td></tr>" +
           '<tr><td>請求書送り</td><td></td><td class="c-a">' +

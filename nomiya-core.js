@@ -9,7 +9,7 @@
  *  { id, date:'YYYY-MM-DD', name, people, amount(税込円), pay, receipt(bool),
  *    memo, paidDate|null, createdAt, updatedAt, deletedAt|null }
  *
- * 【支払い方法】現金 / クレジット / PayPay / 請求書送り / ツケ
+ * 【支払い方法】現金 / クレジット / 電子決済 / 請求書送り / ツケ
  *  請求書送り・ツケ は「その場でお金が入っていない」＝未回収。paidDate が入ると回収済み。
  *
  * 【消費税】飲食は税込表記が実態。請求書には内税(税込金額の中に消費税が含まれる)で内訳を出す。
@@ -30,7 +30,7 @@
   var PAY_METHODS = [
     { key: "cash", label: "現金", short: "現金", unpaid: false },
     { key: "credit", label: "クレジット", short: "クレカ", unpaid: false },
-    { key: "paypay", label: "PayPay", short: "PayPay", unpaid: false },
+    { key: "paypay", label: "電子決済", short: "電子決済", unpaid: false }, // PayPay・楽天ペイ・交通系など（鍵は paypay のまま＝過去の売上を触らない）
     { key: "invoice", label: "請求書送り", short: "請求書", unpaid: true },
     { key: "tsuke", label: "ツケ", short: "ツケ", unpaid: true },
   ];
@@ -50,7 +50,7 @@
        none   = 出していない（現金でレシートも渡していない）
        issued = 出した（発行済み）
        later  = あとで渡す（ツケはその場でお金を受け取っていないので出せない。回収時に渡す）
-       na     = 要らない（振込＝請求書が証憑 / カード・PayPay＝売上票・利用明細が証憑）
+       na     = 要らない（振込＝請求書が証憑 / カード・電子決済＝売上票・利用明細が証憑）
      ※ 集計は2つに分ける。
        「領収書あり」= issued（出した）＋ na（振込・カード＝そもそも要らない。請求書や
          売上票が証憑として残るので、領収書ありと同じ側で数える）
@@ -61,7 +61,7 @@
     { key: "issued", label: "あり", mark: "○" },
     // あとで渡す分はまだ出していない＝「なし」側なので、紙の印も空にする
     { key: "later", label: "あとで", mark: "" },
-    // na = 領収書はいらない。振込(請求書が証憑)・カード/PayPay(売上票・利用明細が証憑)のとき。
+    // na = 領収書はいらない。振込(請求書が証憑)・カード/電子決済(売上票・利用明細が証憑)のとき。
     // 「なし(none)」と分けるのが肝。まとめると、振込やカードの売上まで
     // 「領収書なし」として落とされてしまう。
     // 振込・カードは領収書が要らない分。集計で「あり」側に数えるので、紙の印も○で揃える。
@@ -81,7 +81,7 @@
   function isLater(s) {
     return normalizeReceipt(s && s.receipt) === "later";
   }
-  // 領収書がいらない支払い（振込＝請求書が証憑 / カード・PayPay＝売上票が証憑）
+  // 領収書がいらない支払い（振込＝請求書が証憑 / カード・電子決済＝売上票が証憑）
   function isNa(s) {
     return normalizeReceipt(s && s.receipt) === "na";
   }
@@ -266,6 +266,8 @@
       paidDate: isUnpaidMethod(r.pay) ? r.paidDate || null : null,
       // ツケ・請求書送りを回収したとき、現金で受け取ったか（レジの現金が増えるかどうか）
       paidCash: isUnpaidMethod(r.pay) && r.paidDate ? !!r.paidCash : false,
+      // 「調整」に入れる印。人が1件ずつ選ぶ物で、領収書の記録（なし）は変えない。
+      adj: !!r.adj,
       createdAt: r.createdAt || nowIso,
       updatedAt: nowIso,
       deletedAt: r.deletedAt || null,
@@ -311,6 +313,8 @@
         return false;
       if (o.receipt === "na" && !isNa(s)) return false;
       if (o.receipt === "later" && !isLater(s)) return false;
+      // 'adj'=あり側＋「調整に入れる」印を付けたなし。印は人が1件ずつ選ぶ。
+      if (o.receipt === "adj" && !(isIssued(s) || isNa(s) || s.adj)) return false;
       if (o.name && s.name !== o.name) return false;
       if (q && String(s.name).indexOf(q) < 0 && String(s.memo || "").indexOf(q) < 0) return false;
       if (o.unpaidOnly && !(isUnpaidMethod(s.pay) && !s.paidDate)) return false;
@@ -449,6 +453,46 @@
   /* ===================================================================
      未回収（請求書送り・ツケ で paidDate が無いもの）
      =================================================================== */
+  /**
+   * canAdj(sale)
+   *  「調整に入れる」印を付けられるのは、領収書を出していない分だけ。
+   *  もともと あり側（発行済み・カード/振込）の物には付けさせない。
+   */
+  function canAdj(sale) {
+    var s = sale || {};
+    return !(isIssued(s) || isNa(s));
+  }
+  /**
+   * adjTotals(sales)
+   *  いま何をいくら足しているかを、そのまま出す。
+   *    yes    = もともと あり側
+   *    picked = なしの中から選んだ分
+   *    rest   = 選んでいない なし
+   *    total  = yes + picked（＝「調整」で見たときの額）
+   */
+  function adjTotals(sales) {
+    var list = (sales || []).filter(isAlive);
+    var g = { yes: [], picked: [], rest: [] };
+    list.forEach(function (s) {
+      if (!canAdj(s)) g.yes.push(s);
+      else if (s.adj) g.picked.push(s);
+      else g.rest.push(s);
+    });
+    var one = function (rows) {
+      var t = summarize(rows);
+      return { count: t.count, amount: t.amount };
+    };
+    var yes = one(g.yes);
+    var picked = one(g.picked);
+    return {
+      yes: yes,
+      picked: picked,
+      rest: one(g.rest),
+      total: yes.amount + picked.amount,
+      rows: g,
+    };
+  }
+
   function unpaidSales(sales) {
     return (sales || []).filter(function (s) {
       return isAlive(s) && isUnpaidMethod(s.pay) && !s.paidDate;
@@ -541,7 +585,7 @@
           "振込は請求書が証憑になるので領収書は要りません。求められたら出せます（紙で税抜5万円以上なら収入印紙が必要）。"
         );
       } else {
-        out.push("カード・PayPayは売上票や利用明細が証憑になるので領収書は要りません。");
+        out.push("カード・電子決済は売上票や利用明細が証憑になるので領収書は要りません。");
       }
       return out;
     }
@@ -549,7 +593,7 @@
     var cashless = s.pay === "credit" || s.pay === "paypay";
     if (cashless && isIssued(s)) {
       out.push(
-        "カード・PayPay払いの領収書は発行義務がなく、売上票や利用明細が証憑になります。出すときは「クレジットカード払い」と書けば二重発行と誤解されず、収入印紙も不要です。"
+        "カード・電子決済（PayPayなど）の領収書は発行義務がなく、売上票や利用明細が証憑になります。出すときは「クレジットカード払い」と書けば二重発行と誤解されず、収入印紙も不要です。"
       );
     }
     if (!cashless && isIssued(s)) {
@@ -756,7 +800,7 @@
         unpaidOnly: o.unpaidOnly === false ? false : true,
       })
     ).filter(function (s) {
-      // 請求書に載るのは「請求書送り」「ツケ」だけ（現金/クレカ/PayPayはその場で完結）
+      // 請求書に載るのは「請求書送り」「ツケ」だけ（現金/クレカ/電子決済はその場で完結）
       return isUnpaidMethod(s.pay);
     });
     var sum = summarize(rows);
@@ -1942,6 +1986,7 @@
       staff: _s(s.staff),
       crew: s.crew || [], // ついた人（ヘルプ・場内など）
       paid_cash: !!s.paidCash,
+      adj: !!s.adj,
       created_at: _ts(s.createdAt),
       // 「いつの更新か」は同期の勝ち負けを決める鍵。空では送らない（無ければ今）
       updated_at: _ts(s.updatedAt) || nowIso(),
@@ -1962,6 +2007,7 @@
       memo: _s(r.memo),
       paidDate: r.paid_date || null,
       paidCash: !!r.paid_cash,
+      adj: !!r.adj,
       staff: _s(r.staff),
       crew: r.crew || [],
       createdAt: r.created_at || "",
@@ -2268,6 +2314,8 @@
     normalizeSale: normalizeSale,
     makeId: makeId,
     filterSales: filterSales,
+    canAdj: canAdj,
+    adjTotals: adjTotals,
     sortSales: sortSales,
     summarize: summarize,
     byPayMethod: byPayMethod,
