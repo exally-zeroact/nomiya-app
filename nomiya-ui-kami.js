@@ -1283,10 +1283,124 @@ function loadPdfLibs() {
   return _pdfLibs;
 }
 
+/* ★明朝(Noto Serif JP)は、紙と請求書でしか使わない★
+   ------------------------------------------------------------------------------
+   2026-08-08 実測: 起動のときに明朝の実体を ★0本★ しか取っていなかった
+   （＝起動の画面には明朝で描く文字が1つも無い）。それなのに「目録(CSS)」だけは
+   起動時に読んでいて、そこに ★61KB★ 積まれていた。
+   だから起動の <link> からは外し、★紙を出すこの場所で読む★。
+
+   ★注意：外した以上、読み終わるのを待たないと紙がゴシックのまま出る★
+   この紙は html2canvas で「画面に出ている物をそのまま写す」作り。
+   字が届く前に写すと、写った絵はゴシックのまま固定される（あとから直らない）。 */
+var SERIF_CSS = "https://fonts.googleapis.com/css2?family=Noto+Serif+JP:wght@400;600&display=swap";
+/* ★<link> を足しただけでは、まだ書体は「登録」されていない★
+   目録(CSS)が届いて読み込まれるまで document.fonts の中に明朝は1つも無い。
+   その状態で document.fonts.load() を呼んでも「該当なし」で即座に終わる＝
+   ★待ったつもりで1バイトも待っていない★（2026-08-08、試験が実際にこれを捕まえた）。
+   だから ★目録が読み込まれたことを待てる形★ にしておく。 */
+var _serifCss = null;
+var _serifLink = null;
+function addSerifCss() {
+  if (_serifCss) return _serifCss;
+  _serifCss = new Promise(function (done) {
+    var l = document.createElement("link");
+    _serifLink = l;
+    l.rel = "stylesheet";
+    l.href = SERIF_CSS;
+    l.onload = function () {
+      done(true);
+    };
+    l.onerror = function () {
+      dropSerifCss(); // 届かないと分かった物は置いておかない
+      done(false); // 届かなくても紙は出す（今までどおりの見た目に落ちるだけ）
+    };
+    document.head.appendChild(l);
+  });
+  return _serifCss;
+}
+
+/* ★返事が返ってこない目録を、画面に置いたままにしない★
+   ------------------------------------------------------------------------------
+   2026-08-08 実測（指示役の指摘で調べた）:
+   html2canvas は写すとき ★文書をそっくり複製し、その複製の読み込み完了を待つ★。
+   返事の返ってこない <link> が入っていると ★複製が一生 読み終わらない＝紙が出ない★。
+   （document.fonts.ready の方は、返ってこない <link> があっても普通に終わる。
+     つまり止まっていたのは書体の待ちではなく、写す側だった）
+   だから ★見切りを付けたら、この <link> を外してから写す★。
+   外したあとは また頼み直せるようにしておく（電波が戻れば次は明朝で出る）。 */
+function dropSerifCss() {
+  if (_serifLink && _serifLink.parentNode) _serifLink.parentNode.removeChild(_serifLink);
+  _serifLink = null;
+  _serifCss = null;
+}
+
+/* 紙に使う字が ぜんぶ届くまで待つ。
+   ★document.fonts.load に「その紙の文字」を渡すのが肝★。
+   日本語のWebフォントは文字の範囲ごとに約120枚へ切り分けて配られるので、
+   文字を渡さないと「代表の1枚」しか取りに行かず、待っても揃わない。
+
+   ★いちばん大事な決まり：紙が出ないのが一番まずい★
+   店は電波の細い所でも紙を出す。だから
+   ★書体が来なくても、決めた時間で待つのをやめて そのまま紙を作る★。
+   （ゴシックで出てしまうより、出ない方がずっと困る）
+
+   ★待つ物は ぜんぶ この時間制限の内側に置く★
+   2026-08-08、最初は「目録(CSS)の読み込み待ち」だけ時間制限の外に置いていた。
+   目録が永久に返ってこない回線（圏外に近い・入口で足止めされる Wi-Fi など）では
+   ★紙が一生出ない★状態になっていた。指示役の指摘で気づき、内側に入れた。 */
+var PAPER_FONT_WAIT_MS = 12000;
+var PAPER_FONTS = [
+  '400 16px "Noto Serif JP"',
+  '600 16px "Noto Serif JP"',
+  '400 16px "Noto Sans JP"',
+  '500 16px "Noto Sans JP"',
+  '700 16px "Noto Sans JP"',
+  '400 16px "DM Mono"',
+  '500 16px "DM Mono"',
+];
+async function ensurePaperFonts(inner) {
+  var d = document;
+  var asked = addSerifCss(); // 読み始めるだけ。★ここでは待たない★
+  if (!d.fonts || !d.fonts.load) return true; // 対応していない端末は今までどおり
+  var text = String((inner && inner.textContent) || "").slice(0, 4000);
+
+  // ★待つ物ぜんぶ（目録の読み込み → その紙の文字ぶんの実体 → 反映）
+  var all = (async function () {
+    await asked; // 目録が読み込まれるまで（これを飛ばすと「該当なし」で素通りする）
+    await Promise.all(
+      PAPER_FONTS.map(function (f) {
+        return d.fonts.load(f, text).catch(function () {});
+      })
+    );
+    await d.fonts.ready;
+    return true;
+  })().catch(function () {
+    return true; // 途中で失敗しても紙は出す
+  });
+
+  var timer = null;
+  var late = new Promise(function (ok) {
+    timer = setTimeout(function () {
+      ok(false);
+    }, PAPER_FONT_WAIT_MS);
+  });
+  var inTime = await Promise.race([all, late]);
+  if (timer) clearTimeout(timer);
+  if (!inTime) {
+    // ★写す前に、返ってこない目録を外す（外さないと複製が読み終わらず紙が出ない）★
+    dropSerifCss();
+    toast("⚠️ 書体が届かないまま紙を作りました（電波の良い所で作り直せます）");
+  }
+  return inTime;
+}
+
 /* 画面に出ている紙（.sheet）を、そのままの大きさでPDFにする。
          画面では縮めて見せているので、撮るあいだだけ縮小を外して原寸に戻す。 */
 async function buildPaperPdf(inner) {
   await loadPdfLibs();
+  // ★字がそろってから写す（そろう前に写すと、紙がゴシックのまま固定される）★
+  await ensurePaperFonts(inner);
   var sheets = Array.prototype.slice.call(inner.querySelectorAll(".sheet"));
   if (!sheets.length) throw new Error("紙がありません");
   var wrap = inner.parentElement; // .sheet-scale
