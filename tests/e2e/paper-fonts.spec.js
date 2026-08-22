@@ -132,9 +132,19 @@ test.describe("紙の書体（明朝がそろってから写す）", () => {
     await page.reload({ waitUntil: "load" });
     await expect(page.locator("#scr-input")).toBeVisible();
 
+    /* ★売上を1件 入れてから測る★（2026-08-19）
+       0件のときは紙の下絵を出さない決まりにした（白紙を見せない）ので、
+       「その紙が使う書体」を聞くには 紙が在る状態にする。 */
+    await page.locator(".nav-item[data-scr='input']").click();
+    await page.locator("#inName").fill("田中さん");
+    await page.locator("#inPeople").fill("2");
+    await page.locator("#inAmount").fill("12000");
+    await page.locator("#btnSave").click();
+    await expect(page.locator("#inErr")).toHaveText("");
+
     // 売上帳（明朝を使わない紙）へ。★ここに来ただけで明朝を読み始めないこと★
-    await page.locator(".nav-item[data-scr='list']").click();
-    await expect(page.locator("#scr-list")).toBeVisible();
+    await page.locator(".nav-item[data-scr='sum']").click(); // 売上帳は集計タブ（2026-08-21）
+    await expect(page.locator("#scr-sum")).toBeVisible();
 
     const r = await page.evaluate(async (src) => {
       const serifLoaded = eval("(" + src + ")");
@@ -219,8 +229,8 @@ test.describe("紙の書体（明朝がそろってから写す）", () => {
        ★集計に紙は無い★（printSheets を呼んでいない）。そのぶん実際には
        「渡した記録」と「給与明細」を見ていなかった＝★7種と言いながら5種しか見ていなかった★。 */
     const PAPERS = [
-      ["list", null, "listSheets", "売上帳"],
-      ["list", "tax", "taxSheets", "売上報告書"],
+      ["sum", "ledger", "listSheets", "売上帳"],
+      ["sum", "tax", "taxSheets", "売上報告書"],
       ["inv", null, "invSheets", "請求書"],
       ["close", null, "closeSheets", "日報"],
       ["pay", null, "paySheets", "給与一覧"],
@@ -231,7 +241,7 @@ test.describe("紙の書体（明朝がそろってから写す）", () => {
     await covering("紙", PAPERS.length, async (cov) => {
       for (const [scr, seg, id, name] of PAPERS) {
         await page.locator(`.nav-item[data-scr='${scr}']`).click();
-        if (seg) await page.locator(`#listSeg [data-lseg='${seg}']`).click();
+        if (seg) await page.locator(`#sumSeg [data-mseg='${seg}']`).click();
         // 給与明細は「明細」を押さないと紙が組まれない（押す道順を実際になぞる）
         if (id === "castSheets") {
           const b = page.locator("#payDue button:has-text('明細')").first();
@@ -309,12 +319,22 @@ test.describe("紙の書体（明朝がそろってから写す）", () => {
     await page.reload({ waitUntil: "load" });
     await expect(page.locator("#scr-input")).toBeVisible();
 
+    /* ★売上を1件 入れてから測る★（2026-08-19）
+       0件のときは「🖨 印刷 / PDFにする」が ★灰色＋理由★ になった＝白紙を作らせない決まり。
+       この試験が見たいのは「窓が頼む書体」なので、紙が出る状態を先に作る。 */
+    await page.locator(".nav-item[data-scr='input']").click();
+    await page.locator("#inName").fill("田中さん");
+    await page.locator("#inPeople").fill("2");
+    await page.locator("#inAmount").fill("12000");
+    await page.locator("#btnSave").click();
+    await expect(page.locator("#inErr")).toHaveText("");
+
     // PDFを作れない端末のふり（＝紙だけの窓に落ちる道）
     await page.route(/vendor\/(html2canvas|jspdf)/, (r) => r.abort());
 
     const openPrint = async (scr, seg) => {
       await page.locator(`.nav-item[data-scr='${scr}']`).click();
-      if (seg) await page.locator(`#listSeg [data-lseg='${seg}']`).click();
+      if (seg) await page.locator(`#sumSeg [data-mseg='${seg}']`).click();
       const [w] = await Promise.all([
         context.waitForEvent("page"),
         page
@@ -346,7 +366,7 @@ test.describe("紙の書体（明朝がそろってから写す）", () => {
     };
 
     // 売上帳＝明朝を使わない紙
-    const list = await openPrint("list", null);
+    const list = await openPrint("sum", "ledger"); // 売上帳は集計タブの中
     expect(list.紙の数, "紙が入っていない").toBeGreaterThan(0);
     expect(list.使う書体, "売上帳が明朝を使うようになった＝この試験を見直すこと").not.toContain(
       "Noto Serif JP"

@@ -30,6 +30,8 @@ function renderSettings() {
   $("logoPrev").innerHTML = SETTINGS.logo
     ? '<img src="' + esc(SETTINGS.logo) + '" alt="ロゴ">'
     : "なし";
+  // 入れていない物を「外す」は、出すだけで迷わせる（大きさの行と同じ考え方）
+  $("btnLogoClear").hidden = !SETTINGS.logo;
   $("setHankoSize")
     .querySelectorAll("[data-hs]")
     .forEach(function (b) {
@@ -37,6 +39,7 @@ function renderSettings() {
     });
   // 判子を入れていない店に、大きさだけ聞いても仕方がない
   $("rowHankoSize").style.display = SETTINGS.hanko ? "" : "none";
+  $("btnHankoClear").hidden = !SETTINGS.hanko;
   $("hankoPrev").innerHTML = SETTINGS.hanko
     ? '<img src="' + esc(SETTINGS.hanko) + '" alt="判子">'
     : "なし";
@@ -45,6 +48,10 @@ function renderSettings() {
   });
   $("dataInfo").textContent =
     "売上 " + alive.length + " 件。ファイルに書き出して手元にも残せます。";
+  /* ★戻せない物を作らない★（指示役 2026-08-21）
+     この画面を開いてから1回も書き出していないうちは「全部消す」を押せない。
+     押せない理由は ボタンの中に書く（さっき決めた形と同じ）。 */
+  gateBtn("btnWipe", !UI.exported, "売上を全部消す", "先に書き出してください");
   renderPayRules();
   renderMasters();
 }
@@ -147,17 +154,16 @@ function onExport() {
     closes: CLOSES,
     staff: STAFF,
     works: WORKS,
+    /* ★入金が入っていなかった★（2026-08-21 実測）＝「先に書き出してから消せ」と言うのに、
+       戻せない物が残っていた。書き出す物と読み込む物は 必ず同じにする。 */
+    payments: PAYMENTS,
   };
+  UI.exported = true; // ★書き出したら「全部消す」の鍵が開く★
   var blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  var a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = "uriage-" + todayIso() + ".json";
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(function () {
-    URL.revokeObjectURL(a.href);
-  }, 1000);
+  // ★渡し口は saveAsFile ただ1つ★（target=_blank が付く。ホーム画面から開いたアプリで
+  //   同じ窓にファイルが開くと、戻る導線が無くて閉じ込められる）
+  saveAsFile(blob, "uriage-" + todayIso() + ".json");
+  renderSettings(); // ★鍵が開いた事を、その場で画面に出す★
   toast("💾 書き出しました");
 }
 
@@ -232,6 +238,12 @@ function finishImport(data) {
     CLOSES = cl2;
     saveCloses();
   }
+  if (Array.isArray(data.payments)) {
+    PAYMENTS = data.payments.map(function (x) {
+      return Object.assign({}, x, { updatedAt: nowIso });
+    });
+    savePayments();
+  }
   if (data.partners && typeof data.partners === "object") {
     var pt = {};
     Object.keys(data.partners).forEach(function (k) {
@@ -247,12 +259,48 @@ function finishImport(data) {
 }
 
 function onWipe() {
+  /* ★押す前に「何が」「いくつ」消えるかを数で見せる★（指示役 2026-08-21）
+     ★2026-08-22 裁定3：名前も実態に合わせた★
+       消えるのは 売上・宛先（会社）・請求書番号 の3つだけ。
+       スタッフ・出勤・入金・レジ締め・お店の情報は残るのに「全部消す」と書いていた
+       ＝名前が嘘をつくと、押した人は「もう何も無い」と思って別の物を探しに行く。 */
+  var nSales = SALES.filter(function (s) {
+    return !s.deletedAt;
+  }).length;
+  var nPt = Object.keys(PARTNERS).filter(function (k) {
+    return !PARTNERS[k].deletedAt;
+  }).length;
+  var nInv = (INVOICES || []).length;
+  var nStaff = C.aliveStaff(STAFF).length;
+  var nWork = (WORKS || []).filter(function (w) {
+    return !w.deletedAt;
+  }).length;
+  var nPay = (PAYMENTS || []).filter(function (p) {
+    return !p.deletedAt;
+  }).length;
   openModal(
-    "全部消す",
-    '<div class="hint">売上をすべて消します（クラウドの分も消えます）。取り消せません。<br>先に「書き出す」でバックアップを取ってください。</div>' +
+    "売上を全部消す（宛先と請求書番号も）",
+    '<div class="hint"><b>消えるもの</b><br>売上 <b>' +
+      nSales +
+      "</b> 件 ／ 宛先（会社） <b>" +
+      nPt +
+      "</b> 件 ／ 請求書番号 <b>" +
+      nInv +
+      /* ★2026-08-22 指示役 裁定1-③：窓の言葉を実態に合わせる★
+         押す前に1回 書き出させている＝そのファイルを読み込めば戻せる。
+         「取り消せません」と書くと、戻せる物まで諦めさせてしまう。 */
+      "</b> 件<br>クラウドの分も消えます。<b>この画面からは戻せません。</b><br>" +
+      "いま書き出したファイルを「読み込む」で戻せます。</div>" +
+      '<div class="hint">残るもの：スタッフ ' +
+      nStaff +
+      " 人 ／ 出勤 " +
+      nWork +
+      " 件 ／ 入金 " +
+      nPay +
+      " 件 ／ レジ締め ／ お店の情報</div>" +
       '<div class="btn-right" style="margin-top:14px">' +
       '<button class="btn btn-ghost btn-sm" id="mdNo">やめる</button>' +
-      '<button class="btn btn-ghost btn-danger btn-sm" id="mdYes">全部消す</button></div>'
+      '<button class="btn btn-ghost btn-danger btn-sm" id="mdYes">売上を全部消す</button></div>'
   );
   $("mdNo").onclick = closeModal;
   $("mdYes").onclick = function () {
@@ -315,8 +363,7 @@ function renderClosePeriod() {
         +UI.closeYmd.slice(5, 7) - 1,
         +UI.closeYmd.slice(8, 10) + +b.getAttribute("data-cmv")
       );
-      UI.closeYmd = C.toIso(d);
-      renderClose();
+      setWorkDay(C.toIso(d)); // 入力タブの日も一緒に動く（見ている日は1つ）
     };
   });
 }
@@ -357,7 +404,13 @@ function renderClose() {
   ["clOpen", "clCount", "clMemo"].forEach(function (id) {
     $(id).readOnly = locked;
   });
-  $("btnClose").textContent = locked ? "締め直す" : "この日を締める";
+  /* ★数えた実数を入れるまでは押せない★（押してから「入れてください」は遅い） */
+  gateBtn(
+    "btnClose",
+    !locked && String($("clCount").value).trim() === "",
+    locked ? "締め直す" : "この日を締める",
+    "数えた実数を入れてください"
+  );
   $("clState").textContent = !locked
     ? "数えた実数を入れて「この日を締める」を押すと、この日は動かなくなります。"
     : d.needsRedo
@@ -386,35 +439,7 @@ function renderClose() {
         " 件あります。このままだと、その分の歩合が付きません（一覧からタップで直せます）"
       : "";
   // 出金の一覧
-  $("clOuts").innerHTML = d.outs.length
-    ? d.outs
-        .map(function (o) {
-          return (
-            '<div class="li" data-out="' +
-            esc(o.id) +
-            '"><div class="li-main"><div class="li-nm">' +
-            esc(C.outKindLabel(o.kind)) +
-            (o.staff ? "　" + esc(o.staff) : "") +
-            '</div><div class="li-sub">' +
-            esc(o.memo || "") +
-            '</div></div><div class="li-amt">−' +
-            C.yen(o.amount) +
-            "</div></div>"
-          );
-        })
-        .join("")
-    : '<div class="empty">ありません。買い出し・送り・日払いで金庫から出したら足してください。</div>';
-  $("clOuts")
-    .querySelectorAll("[data-out]")
-    .forEach(function (el) {
-      el.onclick = function () {
-        if (locked) {
-          toast("締めた日です。直すなら「締め直す」を押してください");
-          return;
-        }
-        openOut(el.getAttribute("data-out"));
-      };
-    });
+  drawOuts("clOuts", d.outs, UI.closeYmd, locked);
   // 現金以外
   var o = d.other;
   $("clOther").innerHTML =
@@ -435,14 +460,59 @@ function renderClose() {
 }
 
 // 出金の追加・修正
-function openOut(id) {
+/** ★出金の一覧は ここ1か所で描く★（締めタブと入力タブの両方が呼ぶ）
+ *  2か所に書くと、必ずどちらかが古くなる。押した先も同じ窓（openOut）。 */
+function drawOuts(boxId, outs, ymd, locked) {
+  var box = $(boxId);
+  if (!box) return;
+  box.innerHTML = outs.length
+    ? outs
+        .map(function (o) {
+          return (
+            '<div class="li" data-out="' +
+            esc(o.id) +
+            '"><div class="li-main"><div class="li-nm">' +
+            esc(C.outKindLabel(o.kind)) +
+            (o.staff ? "　" + esc(o.staff) : "") +
+            '</div><div class="li-sub">' +
+            esc(o.memo || "") +
+            '</div></div><div class="li-amt">−' +
+            C.yen(o.amount) +
+            "</div></div>"
+          );
+        })
+        .join("")
+    : '<div class="empty">ありません。買い出し・送り・日払いで金庫から出したら足してください。</div>';
+  box.querySelectorAll("[data-out]").forEach(function (el) {
+    el.onclick = function () {
+      if (locked) {
+        toast("締めた日です。直すなら「締め直す」を押してください");
+        return;
+      }
+      openOut(el.getAttribute("data-out"), ymd);
+    };
+  });
+}
+
+/** 出金の窓。★どの日に付くかを、押す前に窓の中に出す★
+ *  ymd を渡すと その日に付ける（入力タブから開いたとき）。渡さなければ 締めタブの日。 */
+function openOut(id, ymd) {
+  /* ★付ける日は1つ★＝先に締めの日を合わせてから開く。
+     ここを合わせないと、入力タブで 8/21 を見ているのに 締めタブの日（8/19）に付く。 */
+  if (ymd && ymd !== UI.closeYmd) {
+    UI.closeYmd = ymd;
+    renderClosePeriod();
+    renderClose();
+  }
   var inp = closeInput(UI.closeYmd);
   var cur =
     inp.outs.filter(function (x) {
       return x.id === id;
     })[0] || null;
   openModal(
-    cur ? "出金を直す" : "出金を足す",
+    (C.isIsoDate(UI.closeYmd)
+      ? C.mdShort(UI.closeYmd) + "（" + C.weekday(UI.closeYmd) + "）の "
+      : "") + (cur ? "出金を直す" : "出金を足す"),
     '<div class="frow"><span class="flabel">種類</span><div class="chips" id="outKind">' +
       C.OUT_KINDS.map(function (k) {
         return (
@@ -506,6 +576,7 @@ function openOut(id) {
     writeClose({ outs: outs });
     closeModal();
     renderClose();
+    renderDay(); // 入力タブの「この日の出金」も出し直す
     toast("✅ 出金を入れました");
   };
   if ($("outDel")) {
@@ -517,6 +588,7 @@ function openOut(id) {
       });
       closeModal();
       renderClose();
+      renderDay();
       toast("🗑 出金を消しました");
     };
   }

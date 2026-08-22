@@ -218,7 +218,11 @@ function onDelete() {
   var id = UI.editId;
   openModal(
     "この売上を消す",
-    '<div class="hint">消すと売上帳・集計から外れます。取り消せません。</div>' +
+    /* ★2026-08-22 指示役 裁定1-③：窓の言葉を実態に合わせる★
+       「取り消せません」は嘘だった。★書き出したファイルを読み込めば戻せる★（restorePlan）。
+       ＝この画面には戻す道が無い、という本当のことを書く。 */
+    '<div class="hint">消すと売上帳・集計から外れます。<b>この画面からは戻せません。</b><br>' +
+      "書き出したファイルが在れば、設定＞アカウント＞「読み込む」で戻せます。</div>" +
       '<div class="btn-right" style="margin-top:14px">' +
       '<button class="btn btn-ghost btn-sm" id="mdNo">やめる</button>' +
       '<button class="btn btn-ghost btn-danger btn-sm" id="mdYes">消す</button></div>'
@@ -242,6 +246,19 @@ function onDelete() {
   };
 }
 
+/** ★「見ている日」は1つ★（入力タブと締めタブが 別々の日を持たない）
+ *  指示役 2026-08-21：同じ状態を2画面で別々に持つな。
+ *  ★日を書き換えるのは この関数だけ★。書き換えたら 両方 出し直す。
+ *  （前は「出金を打った時だけ揃う」＝すでに2通りあった＝食い違いが出る形だった） */
+function setWorkDay(ymd) {
+  if (!C.isIsoDate(ymd)) return;
+  $("inDate").value = ymd;
+  UI.closeYmd = ymd;
+  renderDay();
+  syncDateNote();
+  renderClose(); // 中で renderClosePeriod も呼ばれる
+}
+
 function renderDay() {
   var d = $("inDate").value;
   var rows = C.sortSales(C.filterSales(SALES, { from: d, to: d }));
@@ -252,6 +269,15 @@ function renderDay() {
     stripItem("組数", C.comma(sum.count), "組") +
     stripItem("人数", C.comma(sum.people), "人") +
     stripItem("売上", C.yen(sum.amount));
+  /* ★その日の出金★（司さん 2026-08-21「入力タブからしか入力しないと思う」）
+     出す物も押した先も、締めタブとまったく同じ（drawOuts / openOut）。 */
+  var inp = closeInput(d);
+  var shimeta = !!inp.closedAt;
+  $("inOutLabel").textContent =
+    (C.isIsoDate(d) ? C.jpDate(d) + "（" + C.weekday(d) + "）" : "この日") + " の出金";
+  drawOuts("inOuts", inp.outs, d, shimeta);
+  gateBtn("btnInOutAdd", shimeta, "＋ 出金を足す", "この日はもう締めています");
+
   $("dayList").innerHTML = rows.length
     ? rows.map(saleLi).join("")
     : '<div class="empty">まだありません</div>';
@@ -327,7 +353,7 @@ function buildListFilters() {
   fp.querySelectorAll("[data-fp]").forEach(function (b) {
     b.onclick = function () {
       UI.filPay = b.getAttribute("data-fp");
-      renderList();
+      renderLedger();
     };
   });
   $("filRec")
@@ -335,7 +361,7 @@ function buildListFilters() {
     .forEach(function (b) {
       b.onclick = function () {
         UI.filRec = b.getAttribute("data-rec");
-        renderList();
+        renderLedger();
       };
     });
 }
@@ -448,19 +474,7 @@ function exportListXlsx() {
         var blob = new Blob([bytes], {
           type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         });
-        var url = URL.createObjectURL(blob);
-        var a = document.createElement("a");
-        a.href = url;
-        a.download = name;
-        // ★ホーム画面アプリで同じ窓に開いて戻れなくなるのを防ぐ★
-        a.target = "_blank";
-        a.rel = "noopener";
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
-        setTimeout(function () {
-          URL.revokeObjectURL(url);
-        }, 60000);
+        saveAsFile(blob, name);
         closeModal();
         toast("📊 " + name + " を書き出しました");
       })
@@ -471,7 +485,39 @@ function exportListXlsx() {
   };
 }
 
+/** ★一覧＝見て・直して・消す所★（司さん 2026-08-21）
+ *  絞り込みのチップも 紙も Excel も ここには置かない（見本＝代行請求の「明細一覧 / 修正」）。
+ *  期間の中の売上を、そのまま日付つきで並べる。押せば その1件を直せる・消せる。 */
 function renderList() {
+  var r = periodRange();
+  var rows = C.sortSales(C.filterSales(SALES, { from: r.from, to: r.to }));
+  var sum = C.summarize(rows);
+  $("tabListStrip").innerHTML =
+    stripItem("組数", C.comma(sum.count), "組") +
+    stripItem("のべ人数", C.comma(sum.people), "人") +
+    stripItem("売上", C.yen(sum.amount));
+  $("listRows").innerHTML = rows.length
+    ? rows
+        .map(function (x) {
+          // 日付を頭に付ける（月をまたいで並ぶので、日が無いと どれか分からない）
+          return saleLi(x).replace(
+            '<div class="li-nm">',
+            '<div class="li-nm">' + esc(C.mdShort(x.date)) + "　"
+          );
+        })
+        .join("")
+    : '<div class="empty">まだありません</div>';
+  $("listRows")
+    .querySelectorAll("[data-id]")
+    .forEach(function (el) {
+      el.onclick = function () {
+        startEdit(el.getAttribute("data-id"));
+      };
+    });
+}
+
+/** ★売上帳＝紙を作る所★（集計タブの中）。絞り込みと紙と Excel はここ。 */
+function renderLedger() {
   $("filPay")
     .querySelectorAll("[data-fp]")
     .forEach(function (b) {
@@ -490,6 +536,12 @@ function renderList() {
     stripItem("のべ人数", C.comma(sum.people), "人") +
     stripItem("売上", C.yen(sum.amount));
 
+  /* ★0件のときに紙やExcelを作らせない★（白紙を作って渡すのが、いちばん分かりにくい） */
+  gateBtn("btnPrintList", !rows.length, "🖨 印刷 / PDFにする", "この期間に売上がありません");
+  gateBtn("btnXlsxList", !rows.length, "📊 Excelに書き出す", "この期間に売上がありません");
+
+  /* ★出す物が無いときは、紙の下絵も出さない★（白紙を見せると「壊れている」に見える） */
+  $("listScale").hidden = !rows.length;
   $("listSheets").innerHTML = ledgerSheetsHtml(rows);
   bindSheetRows($("listSheets"));
   fitSheets("listScale", "listSheets");

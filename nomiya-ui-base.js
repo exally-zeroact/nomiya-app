@@ -44,6 +44,24 @@ function defaultSettings() {
     tpl: "card",
     hanko: "",
     hankoSize: "m", // 請求書に載る判子の大きさ s=小 / m=中(角印16mm相当) / l=大
+    // ★自社テンプレ★ お店が持っている紙（PDF/写真を A4の絵に直した物）と、項目の置き場所
+    //   置き場所は「A4に対する％」で持つ（端末が変わってもズレない。決まりは nomiya-tpl.js）
+    ownTpl: "",
+    ownFields: {},
+    // ★お店のテンプレが Excel のとき★
+    //   原本のバイト列をそのまま持っておき、値だけ差し込む（罫線も判子も消さないため）
+    //   ownCells は「どの項目を、どのマスに入れるか」（例 {to:"B4", cAmount:"E10"}）
+    ownXlsx: "",
+    ownXlsxName: "",
+    ownSheet: 0,
+    ownCells: {},
+    /* ★人が「全部 空にする」で わざと空にした印★
+       これが無いと、開くたびに勝手に当て直して ★人の操作を上書きする★。
+       ここ（既定値）に書き忘れると load() が黙って捨てるので、開き直した瞬間に
+       印が消えて また当て直す（＝この項目は必ず既定値に置く）。 */
+    ownNoGuess: false,
+    // ★お店のExcelに貼ってある判子を動かした量（px）★ 触らなければ 0＝Excelのまま
+    ownStamp: { dx: 0, dy: 0 },
     logo: "",
     logoPos: "top",
     accent: "",
@@ -105,8 +123,9 @@ var UI = {
   invName: "",
   invYm: "", // 請求書は「◯月分」で1枚（起動時に今月が入る）
   closeYmd: "", // 締めはその日1枚（起動時に今日が入る）
+  exported: false, // ★この画面を開いてから1回でも書き出したか★（全部消すの手前に置く鍵）
   payYmd: "", // 給料はその日の出勤を見る
-  listSeg: "list", // 一覧の中の切替 list/sum/tax
+  sumSeg: "ledger", // 集計タブの中の切替 ledger(売上帳)/sum(集計)/tax(税理士の紙)
   invSeg: "inv", // 請求書の中の切替 inv/due/paid
   dueOrder: "old", // 未回収の並び old=古い順 / due=期限が近い順
   setSeg: "self", // 設定の中の切替 self/partner/staff/item
@@ -220,16 +239,54 @@ function saveSales() {
   }
   queuePush();
 }
+/** 設定を端末に覚える。
+ *  ★入らなかったら false を返す★（黙って捨てない）。
+ *  2026-08-16 実測：端末の控えが満杯のとき、ここが黙って諦めていたので
+ *  「✅ Excelを入れました」と出るのに ★開き直すと消えている★ という嘘が出た。
+ *  他の save*（売上・宛先・スタッフ）は前から一言出している。ここだけ黙っていた。 */
 function saveSettings(keepAt) {
   try {
     if (!keepAt) SET_AT = new Date().toISOString();
     localStorage.setItem(K_SET, JSON.stringify(SETTINGS));
     localStorage.setItem(K_SET_AT, SET_AT);
   } catch (e) {
-    /* 設定が保存できなくても画面は動かす */
+    toast("⚠️ 端末の空きが足りず保存できませんでした");
+    return false;
   }
   if (!keepAt) queuePush();
+  return true;
 }
+/** ★その時できない事は、押す前に分かるようにする★
+ *  押してから「⚠️ ありません」と出るのは遅い（司さん実機「押しても何も起きない」2026-08-17）。
+ *  請求書の「📊 Excelに書き出す（書く場所が決まっていません）」で決めた形に、全部そろえる。
+ *    ng=true … 灰色にして、できない理由を ★ボタンの中★ に書く
+ *  ※ここ1か所だけが「押せない見た目」を作る。画面ごとに書くと、必ずどれかが古くなる。
+ */
+function gateBtn(id, ng, base, why) {
+  var b = $(id);
+  if (!b) return;
+  b.disabled = !!ng;
+  b.textContent = ng ? base + "（" + why + "）" : base;
+}
+
+/** 作ったファイルを端末に渡す。
+ *  ★target=_blank は必ず付ける★（ホーム画面から開いたアプリだと、同じ窓でファイルが開いて
+ *  戻れなくなる。全アプリ共通の決まり） */
+function saveAsFile(blob, name) {
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.target = "_blank";
+  a.rel = "noopener";
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function () {
+    URL.revokeObjectURL(url);
+  }, 60000);
+}
+
 function savePartners() {
   try {
     localStorage.setItem(K_PARTNER, JSON.stringify(PARTNERS));
@@ -949,7 +1006,7 @@ function periodSales() {
 }
 
 function renderPeriodBars() {
-  ["periodList", "periodSum", "periodTax"].forEach(function (id) {
+  ["periodList", "periodLedger", "periodSum", "periodTax"].forEach(function (id) {
     var el = $(id);
     if (!el) return;
     var isMonth = UI.period.mode === "month";

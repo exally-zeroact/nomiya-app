@@ -38,15 +38,18 @@ document.addEventListener("visibilitychange", function () {
   if (!document.hidden) setTimeout(resnap, 50);
 });
 function showScreen(name) {
-  if (name === "sum" || name === "tax") {
-    UI.listSeg = name;
-    name = "list";
-  } else if (name === "list") {
-    UI.listSeg = "list";
+  /* ★一覧＝見て直す所／集計＝紙を作る所★（司さん 2026-08-21 で分けた）
+     「集計」「税理士の紙」は 集計タブの中の面。 */
+  if (name === "tax") {
+    UI.sumSeg = "tax";
+    name = "sum";
+  } else if (name === "ledger") {
+    UI.sumSeg = "ledger";
+    name = "sum";
   }
   if (name !== "set") UI.backTo = name;
   UI.screen = name;
-  ["input", "list", "inv", "close", "pay", "set"].forEach(function (n) {
+  ["input", "list", "sum", "inv", "close", "pay", "set"].forEach(function (n) {
     $("scr-" + n).classList.toggle("active", n === name);
   });
   document.querySelectorAll(".nav-item").forEach(function (b) {
@@ -71,9 +74,9 @@ function showScreen(name) {
 // 画面の中の切替（一覧＝一覧/集計/税理士の紙、設定＝自社情報/会社/従業員/商品）
 function syncPanes() {
   [
-    ["listSeg", "data-lseg", UI.listSeg, ["list", "sum", "tax"]],
+    ["sumSeg", "data-mseg", UI.sumSeg, ["ledger", "sum", "tax"]],
     ["invSeg", "data-iseg", UI.invSeg, ["inv", "due", "paid"]],
-    ["setSeg", "data-sseg", UI.setSeg, ["self", "partner", "staff", "item"]],
+    ["setSeg", "data-sseg", UI.setSeg, ["self", "partner", "staff", "item", "acct"]],
   ].forEach(function (x) {
     $(x[0])
       .querySelectorAll("[" + x[1] + "]")
@@ -85,8 +88,8 @@ function syncPanes() {
     });
   });
 }
-function setListSeg(seg) {
-  UI.listSeg = seg;
+function setSumSeg(seg) {
+  UI.sumSeg = seg;
   syncPanes();
   fitAll();
   toTop();
@@ -220,6 +223,7 @@ function renderAll() {
   renderPeriodBars();
   renderDay();
   renderList();
+  renderLedger();
   renderSum();
   renderTax();
   renderInv();
@@ -256,13 +260,10 @@ function init() {
   syncInputChips();
 
   $("btnToday").onclick = function () {
-    $("inDate").value = todayIso();
-    renderDay();
-    syncDateNote();
+    setWorkDay(todayIso());
   };
   $("inDate").onchange = function () {
-    renderDay();
-    syncDateNote();
+    setWorkDay($("inDate").value);
   };
   $("inDate").oninput = syncDateNote;
   // 金額を打つと印紙の注意が変わるので、入力に合わせて注記を出し直す。
@@ -282,8 +283,10 @@ function init() {
     clearForm(true);
   };
 
+  /* ★紙の名前は「いま その画面が見ている期間」から作る★（指示役 2026-08-22 裁定2）
+     期間を持っているのは押した側なので、押した側が渡す（紙の名前で場合分けしない）。 */
   $("btnPrintList").onclick = function () {
-    printSheets("listSheets", "売上帳");
+    printSheets("listSheets", "売上帳", periodLabel());
   };
   $("btnXlsxList").onclick = exportListXlsx;
   $("sumRecTabs")
@@ -313,10 +316,10 @@ function init() {
       };
     });
   $("btnPrintTax").onclick = function () {
-    printSheets("taxSheets", "売上報告書");
+    printSheets("taxSheets", "売上報告書", periodLabel());
   };
   $("btnPrintInv").onclick = function () {
-    printSheets("invSheets", "請求書");
+    printSheets("invSheets", "請求書", C.jpMonth(UI.invYm));
   };
 
   ["clOpen", "clCount", "clMemo"].forEach(function (id) {
@@ -325,6 +328,15 @@ function init() {
       renderClose();
     };
   });
+  /* ★入力タブからの出金★＝入力タブで選んでいる日に付ける（窓の題に日付が出る） */
+  $("btnInOutAdd").onclick = function () {
+    var d = $("inDate").value;
+    if (!C.isIsoDate(d)) {
+      toast("先に日付を入れてください");
+      return;
+    }
+    openOut("", d);
+  };
   $("btnOutAdd").onclick = function () {
     if (closeInput(UI.closeYmd).closedAt) {
       toast("締めた日です。直すなら「締め直す」を押してください");
@@ -365,20 +377,20 @@ function init() {
     openWork("");
   };
   $("btnPrintPay").onclick = function () {
-    printSheets("paySheets", "給与一覧");
+    printSheets("paySheets", "給与一覧", C.jpDate(UI.payYmd));
   };
   $("btnPrintLog").onclick = function () {
-    printSheets("logSheets", "渡した記録");
+    printSheets("logSheets", "渡した記録", C.jpDate(UI.payYmd));
   };
   $("btnPrintCast").onclick = function () {
-    printSheets("castSheets", "給与明細");
+    printSheets("castSheets", "給与明細", C.jpDate(UI.payYmd));
   };
   $("btnCastClose").onclick = function () {
     $("castBox").style.display = "none";
     $("castSheets").innerHTML = "";
   };
   $("btnPrintClose").onclick = function () {
-    printSheets("closeSheets", "日報");
+    printSheets("closeSheets", "日報", C.jpDate(UI.closeYmd));
   };
   $("btnPartners").onclick = function () {
     openPartnerList();
@@ -551,11 +563,11 @@ function init() {
   $("btnAdmin").onclick = function () {
     location.href = "castally-admin.html";
   };
-  $("listSeg")
-    .querySelectorAll("[data-lseg]")
+  $("sumSeg")
+    .querySelectorAll("[data-mseg]")
     .forEach(function (b) {
       b.onclick = function () {
-        setListSeg(b.getAttribute("data-lseg"));
+        setSumSeg(b.getAttribute("data-mseg"));
       };
     });
   $("invSeg")

@@ -229,6 +229,9 @@ function renderInvLook() {
     .forEach(function (b) {
       b.classList.toggle("on", b.getAttribute("data-tpl") === (SETTINGS.tpl || "card"));
     });
+  // 自社テンプレを選んでいるときだけ、その行と部品を用意する
+  if ((SETTINGS.tpl || "card") === "own") loadOwnTplUi();
+  else if ($("ownTplRow")) $("ownTplRow").style.display = "none";
   $("invFont")
     .querySelectorAll("[data-font]")
     .forEach(function (b) {
@@ -607,6 +610,8 @@ function renderInv() {
   renderInvLook();
   var isSample = !UI.invName;
   $("invSample").style.display = isSample ? "" : "none";
+  /* ★見本には「入金済みにする」物が無い★（押してから気づかせない） */
+  gateBtn("btnPaid", isSample, "この請求分を入金済みにする", "先に請求する相手を選んでください");
   $("invSheets").innerHTML = invoiceSheetHtml(isSample ? sampleInvoice() : currentInvoice());
   $("invSkin").textContent = invoiceSkinCss();
   fitSheets("invScale", "invSheets");
@@ -742,9 +747,200 @@ function ivParts(iv) {
   };
 }
 
+/* 自社テンプレの「置き方」を決める部品は、★使う店だけが読む★（数KB）。
+   ふだんの起動には足さない。届いたら1回だけ描き直す。 */
+var _tplLib = null;
+function loadTplLib() {
+  if (_tplLib) return _tplLib;
+  _tplLib = new Promise(function (ok, ng) {
+    if (window.NomiyaTpl) return ok(window.NomiyaTpl);
+    var el = document.createElement("script");
+    el.src = "nomiya-tpl.js";
+    el.onload = function () {
+      if (!window.NomiyaTpl) return ng(new Error("nomiya-tpl.js"));
+      ok(window.NomiyaTpl);
+      if (typeof renderAll === "function") renderAll();
+    };
+    el.onerror = function () {
+      _tplLib = null;
+      ng(new Error("nomiya-tpl.js"));
+    };
+    document.head.appendChild(el);
+  });
+  return _tplLib;
+}
+
+/* 自社テンプレを「登録して置く」画面も、★使う店だけが読む★。
+   ふだんの起動には足さない（読むのは、自社テンプレを選んだときだけ）。 */
+var _ownUi = null;
+function loadOwnTplUi() {
+  if (!_ownUi) {
+    _ownUi = new Promise(function (ok, ng) {
+      if (typeof wireOwnTpl === "function") return ok();
+      var el = document.createElement("script");
+      el.src = "nomiya-owntpl.js";
+      el.onload = function () {
+        typeof wireOwnTpl === "function" ? ok() : ng(new Error("nomiya-owntpl.js"));
+      };
+      el.onerror = function () {
+        _ownUi = null;
+        ng(new Error("nomiya-owntpl.js"));
+      };
+      document.head.appendChild(el);
+    }).then(function () {
+      wireOwnTpl();
+    });
+  }
+  /* ★行を出し直すのは「毎回」★
+     ここを 1回目だけにしていたので、デザインを カード に変えて（＝行を隠して）
+     もう一度 自社のテンプレ に戻したとき、★行が隠れたまま戻らなかった★。
+     ＝「テンプレを選ぶ」「マスを決める」に二度と辿り着けない（開き直すまで）。
+     2026-08-09、iPhoneの大きさで全ボタンを押していて見つけた。 */
+  return _ownUi.then(function () {
+    renderOwnTplRow();
+  });
+}
+
+/* お店のテンプレが Excel のときに要る部品。★使う店だけが読む★
+   nomiya-xlsx.js（ZIPとCRC）→ nomiya-xlsx-tpl.js（読み書き）の順で要る。 */
+var _xlTplLib = null;
+function loadXlsxTplLib() {
+  if (_xlTplLib) return _xlTplLib;
+  _xlTplLib = loadXlsxLib()
+    .then(function () {
+      if (window.NomiyaXlsxTpl) return window.NomiyaXlsxTpl;
+      return new Promise(function (ok, ng) {
+        var el = document.createElement("script");
+        el.src = "nomiya-xlsx-tpl.js";
+        el.onload = function () {
+          window.NomiyaXlsxTpl ? ok(window.NomiyaXlsxTpl) : ng(new Error("nomiya-xlsx-tpl.js"));
+        };
+        el.onerror = function () {
+          ng(new Error("nomiya-xlsx-tpl.js"));
+        };
+        document.head.appendChild(el);
+      });
+    })
+    .catch(function (e) {
+      _xlTplLib = null; // 失敗は次に押したとき取り直す
+      throw e;
+    });
+  return _xlTplLib;
+}
+
+/* ★お店のExcelの紙★
+   画面には「そのExcelの見た目」を表で出し、決めたマスにだけ値を入れて見せる。
+   紙(PDF)も印刷も、他のデザインと同じ道を通る（この中身は .sheet の中にある）。 */
+var _xlBookAsked = false;
+function ownXlsxSheetHtml(iv) {
+  var TL = window.NomiyaTpl;
+  var ready =
+    TL &&
+    window.NomiyaXlsxTpl &&
+    typeof xlGridHtml === "function" &&
+    typeof ownBookNow === "function";
+  if (!ready) {
+    loadTplLib();
+    loadOwnTplUi();
+    loadXlsxTplLib().then(function () {
+      if (typeof renderAll === "function") renderAll();
+    });
+    return '<div class="sheet iv-sheet iv-own"><div class="iv-own-none">読み込んでいます…</div></div>';
+  }
+  var book = ownBookNow();
+  if (!book) {
+    if (!_xlBookAsked) {
+      _xlBookAsked = true;
+      ownBook()
+        .then(function () {
+          _xlBookAsked = false;
+          renderAll();
+        })
+        .catch(function (e) {
+          toast("⚠️ Excelのテンプレを開けませんでした（" + ((e && e.message) || e) + "）");
+        });
+    }
+    return '<div class="sheet iv-sheet iv-own"><div class="iv-own-none">Excelを読んでいます…</div></div>';
+  }
+  var si = Math.min(SETTINGS.ownSheet || 0, book.sheets.length - 1);
+  var values = {};
+  var d = iv.sample ? null : ownXlsxData();
+  if (d) {
+    /* ★画面に出す文字は、そのマスの書式で出す★
+       アプリ側の文字（例「2026年8月9日」）をそのまま出すと、
+       ★画面では見切れるのに、Excelでは 2026/8/9 で収まる★ という食い違いが出る
+       （司さんの指摘「見切れとる」2026-08-09）。 */
+    var sh = book.sheets[si];
+    TL.planEdits(SETTINGS.ownCells, d).edits.forEach(function (e) {
+      values[e.ref] = window.NomiyaXlsxTpl.previewText(book, sh, e.ref, e.kind, e.value, e.text);
+    });
+  }
+  /* ★余白は、そのExcelが持っている値をそのまま使う★
+     ここを勝手な値（20px）にしていたので ★両端が詰まりすぎて別の紙に見えた★
+     （司さんの指摘 2026-08-09）。Excelの余白はインチなので 96 を掛けて px にする。 */
+  var mg = (book.sheets[si] && book.sheets[si].margins) || {
+    left: 0.7,
+    right: 0.7,
+    top: 0.75,
+    bottom: 0.75,
+  };
+  var ml = Math.round(mg.left * 96);
+  var mr = Math.round(mg.right * 96);
+  var mt = Math.round(mg.top * 96);
+  var w = xlGridWidth(book, si);
+  var k = Math.min(1, (794 - ml - mr) / w); // A4の幅から、紙の余白を引いた中身の幅に収める
+  return (
+    '<div class="sheet iv-sheet iv-xl" style="padding:' +
+    mt +
+    "px " +
+    mr +
+    "px 0 " +
+    ml +
+    'px">' +
+    '<div class="xl-fit" style="width:' +
+    w +
+    "px;transform:scale(" +
+    Math.round(k * 1000) / 1000 +
+    ')">' +
+    xlGridHtml(book, si, values, {}) +
+    "</div></div>"
+  );
+}
+
 function invoiceSheetHtml(iv) {
   var tpl = SETTINGS.tpl || "card";
+  if (tpl === "own" && SETTINGS.ownXlsx) return ownXlsxSheetHtml(iv);
   var q = ivParts(iv);
+  /* ★自社テンプレ★（お店が持っている紙を敷いて、その上に部品を置く）
+     ・敷く物は SETTINGS.ownTpl（絵。PDFは登録のときに絵にしてある）
+     ・置き場所は SETTINGS.ownFields（★A4に対する％★＝画面でも紙でも同じ場所に出る）
+     ・テンプレにもう印刷されている項目は show:false で出さない
+     計算も部品(ivParts)も他のデザインと同じ物を使う＝紙の中身がズレない */
+  if (tpl === "own") {
+    var TL = window.NomiyaTpl;
+    if (!TL) {
+      // 置き方を決める部品がまだ届いていない。届いたら描き直す（数KBなのですぐ来る）
+      loadTplLib();
+      return '<div class="sheet iv-sheet iv-own"><div class="iv-own-none">読み込んでいます…</div></div>';
+    }
+    var placed = TL.normalize(SETTINGS.ownFields);
+    var bg = SETTINGS.ownTpl
+      ? '<img class="iv-own-bg" src="' + esc(SETTINGS.ownTpl) + '" alt="">'
+      : '<div class="iv-own-none">自社のテンプレがまだありません（設定 → 請求書の見た目 で選べます）</div>';
+    var body = "";
+    TL.visible(placed).forEach(function (f) {
+      if (!q[f.key]) return;
+      body +=
+        '<div class="iv-own-f" data-f="' +
+        f.key +
+        '" style="' +
+        TL.styleOf(placed[f.key]) +
+        '">' +
+        q[f.key] +
+        "</div>";
+    });
+    return '<div class="sheet iv-sheet iv-own">' + bg + body + "</div>";
+  }
   if (tpl === "band") {
     // 上に濃色の帯（表題を白抜き）／本文は白地／最下部に振込先
     return (
@@ -988,6 +1184,36 @@ var SHEET_CSS = [
            (uto-room.com / tenantkoubou.com)。塗りは帯と見出しだけ＝印刷でインクを食わない。 */
   ".iv-sheet{display:flex;flex-direction:column;padding:0;color:#33302c;}",
   ".iv-pad{flex:1;display:flex;flex-direction:column;}",
+  /* ★自社テンプレ★ お店の紙を敷いて、その上に部品を置く。
+     ・敷く絵は A4 いっぱい（794x1123）。紙は白地のままで、絵はその上に乗るだけ
+     ・部品は position:absolute。位置は nomiya-tpl.js が ★％★ で出す
+       （px にすると画面の縮小表示と紙でズレる） */
+  ".iv-own{position:relative;display:block;padding:0;}",
+  ".iv-own-bg{position:absolute;left:0;top:0;width:794px;height:1123px;object-fit:contain;}",
+  ".iv-own-f{position:absolute;z-index:1;}",
+  ".iv-own-none{position:absolute;left:0;top:46%;width:100%;text-align:center;color:#888888;font-size:13px;}",
+  /* 置いた部品の中は、既定のデザインの余白（左右のはみ出し）を持ち込まない */
+  ".iv-own-f .iv-grand,.iv-own-f .iv-sum,.iv-own-f .iv-tbl{margin:0;}",
+  /* ★お店のテンプレが Excel のとき★
+     紙にも同じ表を出す。★刷る窓は別の窓なので、画面のCSSは届かない★＝ここにも要る。
+     紙では目盛線を出さない（Excelの印刷と同じ）。実際の罫線はセルごとに直接付けている。 */
+  ".iv-xl{padding:20px;overflow:hidden;}",
+  ".xl-fit{transform-origin:top left;}",
+  ".xl-grid{border-collapse:collapse;table-layout:fixed;font-size:12px;color:#000000;",
+  "font-family:'Yu Gothic','游ゴシック','Hiragino Sans','Noto Sans JP',sans-serif;}",
+  ".xl-grid td{padding:1px 3px;overflow:hidden;white-space:nowrap;",
+  "text-overflow:clip;vertical-align:bottom;}",
+  ".xl-sheet{position:relative;}",
+  // マスに収まらない文字は、隣が空ならはみ出して見せる（Excelと同じ）
+  ".xl-grid td.xl-sp{position:relative;overflow:visible;z-index:1;}",
+  ".xl-grid td.xl-sp>span{position:absolute;bottom:1px;white-space:nowrap;}",
+  ".xl-grid td.xl-sp.r>span{right:3px;}",
+  ".xl-grid td.xl-sp.l>span{left:3px;}",
+  ".xl-grid td.xl-sp.c>span{left:50%;transform:translateX(-50%);}",
+  /* ★判子は文字より上★。ここが ★効いているほう★（画面のCSSの .xl-img より後に入るので勝つ）。
+     0 にすると、はみ出した文字と重なった所で指が文字に当たって ★判子を掴めない★（実測）。
+     見張り: own-template-xlsx.spec.js「判子が、はみ出した文字の下に潜らない」 */
+  ".xl-img{position:absolute;z-index:2;}",
   /* 共通部品 */
   // 請求日とNo.は右端を揃える（行ごとに文字数が違うので右揃えが必要）
   ".iv-meta{font-size:10.5px;line-height:1.9;color:#6a655e;text-align:right;}",
@@ -1468,26 +1694,48 @@ async function buildPaperPdf(inner) {
   }
 }
 
-function printSheets(innerId, title) {
+/** ★紙の保存名の案（中身から作る）★ 例: Castally_売上帳_2026年8月.pdf
+ *  指示役 2026-08-22 裁定2。
+ *  ★窓を開く作りは変えない★（ホーム画面のアプリで同じ窓に開くと戻れなくなる）。
+ *  ただし 窓に開いたPDFの名前は blob の uuid になり、人が名前を付けられない。
+ *  そこで ★名前の案を先に出し、窓の題にも同じ名前を入れる★。
+ *  （Excelの xlsxSuggestName と同じ作り方。作り直していない） */
+function paperName(title, when) {
+  var shop = (SETTINGS && SETTINGS.store) || "";
+  var parts = [];
+  if (shop) parts.push(shop);
+  parts.push(title);
+  if (when) parts.push(when);
+  return (
+    parts
+      .join("_")
+      .replace(/\s+/g, "")
+      .replace(/[\\/:*?"<>|]/g, "-") + ".pdf"
+  );
+}
+
+function printSheets(innerId, title, when) {
   var inner = $(innerId);
   if (!inner || !inner.innerHTML.trim()) {
     toast("⚠️ 印刷するものがありません");
     return;
   }
-  toast("📄 " + title + "を作っています…");
+  var name = paperName(title, when);
+  // ★刷る前に、付ける名前を出す★（出口は toast ただ1つ）
+  toast("📄 " + name + " を作っています…");
   buildPaperPdf(inner)
     .then(function (blob) {
       var url = URL.createObjectURL(blob);
       var w = window.open(url, "_blank");
       if (!w) {
         // 新しい窓を開けない端末は、その場で保存する
-        var a = document.createElement("a");
-        a.href = url;
-        a.download = title + ".pdf";
-        a.click();
-        toast("📄 " + title + " を保存しました。開いて印刷してください");
+        // ★渡し口は saveAsFile ただ1つ★（target=_blank が付く。ホーム画面から開いたアプリで
+        //   同じ窓にPDFが開くと、戻る導線が無くて閉じ込められる）
+        saveAsFile(blob, name);
+        toast("📄 " + name + " を保存しました。開いて印刷してください");
       } else {
-        toast("📄 " + title + " を開きました。共有／プリントから印刷できます");
+        // 窓のPDFは名前を持てない（blobのuuid）＝★保存するときの名前をここで渡す★
+        toast("📄 開きました。「" + name + "」の名前で保存してください");
       }
       setTimeout(function () {
         URL.revokeObjectURL(url);
@@ -1497,18 +1745,20 @@ function printSheets(innerId, title) {
       // 何で作れなかったかを残す（端末で困ったときに聞けるように）
       window.__PDF_ERR__ = String((e && e.message) || e);
       // PDFが作れない端末＝いままでどおり「紙だけの窓」を開いて刷る
-      printSheetsFallback(innerId, title);
+      printSheetsFallback(innerId, title, when);
     });
 }
 
-function printSheetsFallback(innerId, title) {
+function printSheetsFallback(innerId, title, when) {
   var inner = $(innerId);
   if (!inner || !inner.innerHTML.trim()) {
     toast("⚠️ 印刷するものがありません");
     return;
   }
+  // ★窓の題＝付けてほしい名前★（この窓から「PDFとして保存」すると、この題が名前の案になる）
+  var name = paperName(title, when);
   // ★その紙が実際に使う書体だけを、新しい窓にも頼む（クラス名では見分けない）★
-  var html = printableHtml(inner.innerHTML, title, fontsUsedIn(inner));
+  var html = printableHtml(inner.innerHTML, name.replace(/\.pdf$/, ""), fontsUsedIn(inner));
   var pw = null;
   try {
     pw = window.open("", "_blank");
@@ -1517,14 +1767,14 @@ function printSheetsFallback(innerId, title) {
   }
   if (!pw || !pw.document) {
     // ポップアップが開けない端末＝今までどおり同じ画面で印刷する
-    toast("🖨 PDFにするときは、この画面で「PDFとして保存」を選んでください");
+    toast("🖨 「" + name + "」の名前で保存してください（この画面で「PDFとして保存」）");
     $("printArea").innerHTML = inner.innerHTML;
     _printTitle = document.title;
-    document.title = title;
+    document.title = name.replace(/\.pdf$/, "");
     window.print();
     return;
   }
-  toast("🖨 新しい画面が開きます。PDFにするときは「PDFとして保存」を選んでください");
+  toast("🖨 新しい画面が開きます。「" + name + "」の名前で保存してください");
   pw.document.open();
   pw.document.write(html);
   pw.document.close();

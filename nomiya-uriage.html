@@ -42,7 +42,7 @@
       href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&family=DM+Mono:wght@400;500&display=swap"
       rel="stylesheet"
     />
-    <link rel="stylesheet" href="nomiya-uriage.css?v=e6ec89fa" />
+    <link rel="stylesheet" href="nomiya-uriage.css?v=6d689554" />
     <!-- A4用紙のスタイル（画面プレビューと印刷用の新しい窓で同じものを使う＝見た目のズレを作らない） -->
     <style id="sheetCss"></style>
     <!-- 店の色・書体の上書き（設定で選んだときだけ中身が入る） -->
@@ -150,6 +150,18 @@
         </div>
       </div>
 
+      <!-- ★打つ物は「入力」に在る★（司さん 2026-08-21
+           「入力ってタブがあったらそこからしか入力しないって思うのがほとんどやないか？」）
+           出金は締めタブにもあるが、窓は1つ・付く日も1つ（下の hint に日付を出す）。 -->
+      <div class="card" id="inOutBox">
+        <div class="card-label" id="inOutLabel">この日の出金</div>
+        <div class="hint">買い出し・送りのタクシー代など、レジから出したお金。</div>
+        <div id="inOuts"></div>
+        <div class="btn-row" style="margin-top: 10px">
+          <button class="btn btn-ghost btn-sm" type="button" id="btnInOutAdd">＋ 出金を足す</button>
+        </div>
+      </div>
+
       <div class="card">
         <div class="card-label" id="dayLabel">この日の売上</div>
         <div class="strip" id="dayStrip"></div>
@@ -158,16 +170,29 @@
     </section>
 
     <!-- ==================== 一覧（売上帳） ==================== -->
+    <!-- ===== 一覧＝見て・直して・消す所。紙もExcelも ここには置かない =====
+         司さん 2026-08-21「一覧にPDFにしたりする機能はいらんやろ／赤丸のごちゃごちゃは一覧にはいらん」
+         見本＝代行請求の「明細一覧 / 修正」（絞り込みは最小・タップで1件ずつ直す） -->
     <section class="screen" id="scr-list">
-      <!-- 毎日使うのは「一覧」。集計と税理士の紙は同じ売上の見方違いなので、ここの中に入れる。 -->
-      <div class="chips chips-bar" id="listSeg">
-        <button class="chip chip-sm on" type="button" data-lseg="list">一覧</button>
-        <button class="chip chip-sm" type="button" data-lseg="sum">集計</button>
-        <button class="chip chip-sm" type="button" data-lseg="tax">税理士の紙</button>
+      <div class="period" id="periodList"></div>
+      <div class="strip" id="tabListStrip"></div>
+      <div class="card">
+        <div class="card-label">明細</div>
+        <div class="hint" style="margin-bottom: 8px">タップで1件ずつ 直せます・消せます。</div>
+        <div id="listRows"></div>
+      </div>
+    </section>
+
+    <!-- ===== 集計＝紙を作る所（売上帳・集計・税理士の紙）。毎日は使わない ===== -->
+    <section class="screen" id="scr-sum">
+      <div class="chips chips-bar" id="sumSeg">
+        <button class="chip chip-sm on" type="button" data-mseg="ledger">売上帳</button>
+        <button class="chip chip-sm" type="button" data-mseg="sum">集計</button>
+        <button class="chip chip-sm" type="button" data-mseg="tax">税理士の紙</button>
       </div>
 
-      <div class="pane active" id="pane-list">
-        <div class="period" id="periodList"></div>
+      <div class="pane active" id="pane-ledger">
+        <div class="period" id="periodLedger"></div>
 
         <div class="card">
           <div class="card-label">支払い方法で見る</div>
@@ -206,7 +231,6 @@
         </div>
       </div>
 
-      <!-- ===== 集計（画面で見るだけ。紙は「税理士の紙」） ===== -->
       <div class="pane" id="pane-sum">
         <div class="period" id="periodSum"></div>
         <div class="chips chips-bar" id="sumRecTabs">
@@ -267,7 +291,6 @@
       </div>
     </section>
 
-    <!-- ==================== 請求書 ==================== -->
     <section class="screen" id="scr-inv">
       <!-- ツケも請求書送りも「まだもらっていない金」。1か所にまとめる。 -->
       <div class="chips chips-bar" id="invSeg">
@@ -287,7 +310,32 @@
               <button class="chip chip-sm" type="button" data-tpl="card">カード</button>
               <button class="chip chip-sm" type="button" data-tpl="band">帯</button>
               <button class="chip chip-sm" type="button" data-tpl="tate">縦組み</button>
+              <!-- お店が持っている紙を敷いて、その上に項目を置く -->
+              <button class="chip chip-sm" type="button" data-tpl="own">自社のテンプレ</button>
             </div>
+          </div>
+          <!-- 「自社のテンプレ」を選んだときだけ出る -->
+          <div class="frow" id="ownTplRow" style="display: none">
+            <span class="flabel">自社のテンプレ</span>
+            <div class="btn-row">
+              <!-- ★2行になる所は、こちらで決める★
+                   自動の折り返しに任せると「…決め／る」で切れる（司さんの指摘 2026-08-09） -->
+              <!-- ★言葉は「読み込む」／「書き出す」の対で統一する★（司さん 2026-08-17
+                   「なんで統一させてないんど」）。同じ動きは、アプリのどこでも同じ言い方。 -->
+              <button class="btn btn-ghost btn-sm" type="button" id="btnOwnPick">
+                お店の様式を<br />読み込む
+              </button>
+              <button class="btn btn-ghost btn-sm" type="button" id="btnOwnPlace">
+                項目の置き場所を<br />決める
+              </button>
+            </div>
+            <input
+              type="file"
+              id="ownTplFile"
+              accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/pdf,image/*"
+              style="display: none"
+            />
+            <span class="hint" id="ownTplNote"></span>
           </div>
           <div class="frow">
             <span class="flabel">色</span>
@@ -329,6 +377,18 @@
         <div class="btn-row no-print">
           <button class="btn btn-ghost" id="btnPrintInv">🖨 印刷 / PDFにする</button>
         </div>
+        <!-- 自社のテンプレが Excel のときだけ出る。
+             ★言葉は「何が手に入るか」だけ書く★（中の動きは書かない・隣の「印刷 / PDFにする」と形をそろえる）
+             司さん「意味わからない」2026-08-17。押せない時の理由は renderOwnTplRow が中に書く。 -->
+        <div class="btn-row no-print">
+          <button class="btn btn-ghost" id="btnOwnXlsx" style="display: none">
+            📊 Excelに書き出す（お店の様式）
+          </button>
+        </div>
+        <!-- ★押せない理由と、その直し方への入口★
+             ここは「見た目を変える」の ★外★ に置く。中に置くと畳んだ時に消えて
+             ★たどり着けない★（司さん実機 2026-08-17「押しても何も起きない」）。 -->
+        <div class="hint no-print why-row" id="ownXlsxWhy" style="display: none"></div>
         <div class="btn-row no-print">
           <button class="btn btn-ghost" id="btnPaid">この請求分を入金済みにする</button>
         </div>
@@ -375,6 +435,7 @@
         <button class="chip chip-sm" type="button" data-sseg="partner">会社</button>
         <button class="chip chip-sm" type="button" data-sseg="staff">従業員</button>
         <button class="chip chip-sm" type="button" data-sseg="item">商品</button>
+        <button class="chip chip-sm" type="button" data-sseg="acct">アカウント</button>
       </div>
 
       <div class="pane active" id="pane-self">
@@ -477,6 +538,12 @@
           </div>
         </div>
 
+      </div>
+
+      <!-- ===== アカウント・データ（お店の情報とは別の面にする） =====
+           ★1画面に「お店の情報」「アカウント」「データ（全部消す）」を並べない★
+           （指示役 2026-08-21。危ない物を、毎日 触る物と同じ所に置かない） -->
+      <div class="pane" id="pane-acct">
         <div class="card">
           <div class="card-label">アカウント</div>
           <div class="hint" id="acctInfo"></div>
@@ -499,7 +566,10 @@
           </div>
           <input type="file" id="fileImport" accept="application/json" style="display: none" />
           <div class="btn-right">
-            <button class="btn btn-ghost btn-danger btn-sm" id="btnWipe">全部消す</button>
+            <!-- ★名前を実態に合わせた（指示役 2026-08-22 裁定3）★
+                 消えるのは 売上・宛先（会社）・請求書番号だけ。
+                 スタッフ・出勤・入金・レジ締め・お店の情報は残るのに「全部消す」と書いていた。 -->
+            <button class="btn btn-ghost btn-danger btn-sm" id="btnWipe">売上を全部消す</button>
           </div>
         </div>
       </div>
@@ -745,7 +815,7 @@
       </div>
 
       <!-- 締め方は人ごと。誰にいつ渡すかは、アプリが数える（手で数えさせない） -->
-      <div class="card">
+      <div class="card" id="payDueBox">
         <div class="card-label">この日に渡す人</div>
         <div id="payDue"></div>
       </div>
@@ -762,13 +832,13 @@
         </div>
       </div>
 
-      <div class="card">
+      <div class="card" id="payMonthBox">
         <div class="card-label">この月のまとめ</div>
         <div id="payMonth"></div>
       </div>
 
       <!-- いつ・誰に・いくら渡したか。渡した時の額で残す（あとで決め方を直しても動かない） -->
-      <div class="card">
+      <div class="card" id="payLogBox">
         <div class="card-label">渡した記録</div>
         <div id="payLog"></div>
       </div>
@@ -798,8 +868,10 @@
     <!-- ==================== NAV ==================== -->
     <!-- 一番使う「入力」を真ん中に置く（親指が届く位置） -->
     <nav class="bottom-nav">
-      <button class="nav-item" data-scr="list" type="button">
-        <span class="nav-ic">📋</span><span class="nav-lb">一覧</span>
+      <!-- ★毎日 打つ所（入力）のとなりに 一覧★（司さん 2026-08-21）
+           紙を作る所（集計）は 端に置く -->
+      <button class="nav-item" data-scr="sum" type="button">
+        <span class="nav-ic">📊</span><span class="nav-lb">集計</span>
       </button>
       <button class="nav-item" data-scr="inv" type="button">
         <span class="nav-ic">🧾</span><span class="nav-lb">請求書</span>
@@ -807,6 +879,9 @@
       </button>
       <button class="nav-item active" data-scr="input" type="button">
         <span class="nav-ic">✍️</span><span class="nav-lb">入力</span>
+      </button>
+      <button class="nav-item" data-scr="list" type="button">
+        <span class="nav-ic">📋</span><span class="nav-lb">一覧</span>
       </button>
       <button class="nav-item" data-scr="pay" type="button">
         <span class="nav-ic">💰</span><span class="nav-lb">給料</span>
@@ -858,12 +933,12 @@
     <script defer src="hanko.js?v=d1d32621"></script>
     <script defer src="nomiya-core.js?v=f0399771"></script>
     <!-- ★画面のJS。読み込む順番が命（起動は最後）。tests/app-source.mjs が食い違いを見張る -->
-    <script defer src="nomiya-ui-base.js?v=b1f08c2b"></script>
-    <script defer src="nomiya-ui-uriage.js?v=bea0a105"></script>
+    <script defer src="nomiya-ui-base.js?v=0439a450"></script>
+    <script defer src="nomiya-ui-uriage.js?v=ae730178"></script>
     <script defer src="nomiya-ui-kaishu.js?v=53cff47e"></script>
-    <script defer src="nomiya-ui-kami.js?v=b2a06aae"></script>
-    <script defer src="nomiya-ui-settei.js?v=bdb8d67a"></script>
-    <script defer src="nomiya-ui-kyuryo.js?v=1b52a0dd"></script>
-    <script defer src="nomiya-ui-boot.js?v=9d7617e4"></script>
+    <script defer src="nomiya-ui-kami.js?v=2e2b05c8"></script>
+    <script defer src="nomiya-ui-settei.js?v=17f251b9"></script>
+    <script defer src="nomiya-ui-kyuryo.js?v=711a2d8a"></script>
+    <script defer src="nomiya-ui-boot.js?v=9ec96d33"></script>
   </body>
 </html>

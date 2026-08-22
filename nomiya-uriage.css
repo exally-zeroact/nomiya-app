@@ -19,6 +19,11 @@
          ★色はここだけに書く。部品のCSSに生の色コードを書かない。
            1か所だけ直して全体が崩れる、を止めるため（tests/nomiya-brand.test.js が見張る）。
          ★A4の紙（SHEET_CSS）と印刷用は別。紙は白地に黒のままにするので変数に寄せない。 */
+/* ★hidden と書いた物は、必ず消えること★
+   class の display が打ち消して「中身が空の枠だけ」が出る事故を止める（全アプリの決まり）。 */
+[hidden] {
+  display: none !important;
+}
 :root {
   --c-bg: #f6f7fa;
   --c-card: #ffffff;
@@ -30,10 +35,10 @@
   --c-soft: #f1f3f8;
   --c-text: #0f1728;
   --c-text2: #0f1728;
-  --c-flabel: #3e4964;
-  --c-label: #5a6480;
-  --c-label2: #5a6480;
-  --c-ph: #6b7690;
+  --c-flabel: #333333;
+  --c-label: #555555;
+  --c-label2: #555555;
+  --c-ph: #6e6e6e;
   --c-minus: #a33320;
   --c-accent: #0f1728;
   --c-btn: #e7ecf5;
@@ -77,7 +82,7 @@
   --c-line-soft2: #e1e4eb;
   --c-line-soft3: #e1e4eb;
   --c-line-soft4: #e1e4eb;
-  --c-label3: #5a6480;
+  --c-label3: #555555;
   --c-line2b: #b4bac9;
   --c-lock: #f1f3f8;
 }
@@ -268,6 +273,26 @@ body {
   font-weight: 700;
   cursor: pointer;
   transition: all 0.15s;
+}
+/* ★押せないボタンは「灰色＋押せない指」★（司さん実機 2026-08-17）
+   理由はボタンの中に書く決まりなので、見た目でも ★押せないと分かる★ ようにする。
+   （字は読める濃さを残す＝理由が読めないと意味がない） */
+.btn:disabled,
+.btn[disabled] {
+  background: var(--c-bg);
+  color: var(--c-label);
+  border-color: var(--c-line2);
+  border-style: dashed;
+  box-shadow: none;
+  cursor: not-allowed;
+}
+/* 押せない物の理由と、その直し方への入口（畳みの外に置く） */
+.why-row {
+  display: block;
+  margin: 6px 2px 0;
+}
+.why-row .btn {
+  margin-top: 6px;
 }
 /* 主役のボタンは、枠を太く濃くして見分ける（面の色は同じ） */
 .btn-primary {
@@ -1205,4 +1230,230 @@ body {
   #printArea .sheet:last-child {
     page-break-after: auto;
   }
+}
+
+/* ★自社テンプレ：項目の置き場所を決める画面★
+   ・A4の紙をそのままの形（794:1123）で見せて、その上で項目を指で動かす
+   ・位置は％で持つので、画面が小さくても大きくても同じ場所に決まる
+   ・色は :root の変数だけを使う（生の色コードは書かない） */
+.op-wrap {
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.op-paper {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 794 / 1123;
+  background: var(--c-card);
+  border: 1px solid var(--c-line);
+  border-radius: 4px;
+  overflow: hidden;
+  touch-action: none; /* 指で動かす間、画面が一緒に動かないように */
+  user-select: none;
+}
+.op-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+.op-none {
+  position: absolute;
+  top: 46%;
+  width: 100%;
+  text-align: center;
+  color: var(--c-label);
+  font-size: 12px;
+}
+.op-f {
+  position: absolute;
+  min-height: 22px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--c-btn-line);
+  background: var(--c-chip);
+  border-radius: 3px;
+  cursor: move;
+}
+.op-f.off {
+  opacity: 0.35;
+  border-style: dashed;
+}
+.op-lb {
+  display: block;
+  padding: 3px 5px;
+  font-size: 10px;
+  line-height: 1.2;
+  color: var(--c-chip-t);
+  pointer-events: none;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+/* 右下の角＝幅を変えるつまみ。指で掴める大きさにする */
+.op-grip {
+  position: absolute;
+  right: -6px;
+  bottom: -6px;
+  width: 20px;
+  height: 20px;
+  border: 1.5px solid var(--c-btn-line);
+  background: var(--c-card);
+  border-radius: 50%;
+  cursor: ew-resize;
+}
+
+/* ===== お店のテンプレが Excel のとき =====
+   画面には「そのExcelの見た目」を表で出す。
+   罫線・結合・列幅・太字・塗りは、Excelの中から読んだ物をそのまま当てている。 */
+.xl-wrap .xl-grid td {
+  outline: 1px dotted var(--c-line); /* 割り当ての画面だけ、マスの境が分かるように薄い目盛線 */
+  outline-offset: -1px;
+}
+.xl-wrap {
+  margin-top: 10px;
+  max-height: 46vh;
+  overflow: auto;
+  border: 1px solid var(--c-line);
+  border-radius: 8px;
+  background: var(--c-card);
+  -webkit-overflow-scrolling: touch;
+}
+/* 表そのもの（Excelの見た目を、読んだ値だけで組み立てる） */
+/* ★マスに収まらない文字は、隣が空ならはみ出して見える（Excelと同じ）★
+   CSSは「幅を超えた文字は右へこぼれる」ので、右寄せの文字を左へ伸ばすには
+   文字を包んで、その右端をマスの右端に留める。 */
+.xl-grid td.xl-sp {
+  position: relative;
+  overflow: visible;
+  z-index: 1;
+}
+.xl-grid td.xl-sp > span {
+  position: absolute;
+  bottom: 1px;
+  white-space: nowrap;
+}
+.xl-grid td.xl-sp.r > span {
+  right: 3px;
+}
+.xl-grid td.xl-sp.l > span {
+  left: 3px;
+}
+.xl-grid td.xl-sp.c > span {
+  left: 50%;
+  transform: translateX(-50%);
+}
+.xl-sheet {
+  position: relative;
+}
+/* ★判子を指で動かせるようにする★
+   iPhoneでは、指を置いた瞬間にブラウザが横スクロールを始めるので touch-action:none が要る。
+   絵の長押しで出る保存メニューや画像のドラッグも止める。
+   （司さん実機で「判子はなにもできない」2026-08-09） */
+.xl-grid ~ .xl-img.xl-drag,
+.xl-img.xl-drag {
+  pointer-events: auto;
+  cursor: move;
+  touch-action: none;
+  -webkit-user-drag: none;
+  -webkit-touch-callout: none;
+  user-select: none;
+  -webkit-user-select: none;
+  /* 動かせることが分かる印 */
+  outline: 2px dashed var(--c-accent);
+  outline-offset: 2px;
+}
+/* 貼ってある絵（判子・ロゴ）。表の上に、Excelと同じ場所へ重ねる */
+.xl-img {
+  position: absolute;
+  pointer-events: none;
+  /* ★判子は文字より上★ Excelでも図形は上に載る。
+     下にすると、はみ出した文字(z-index:1)に隠れて ★指で掴めない★（実測）
+     ★効いているのは こっちではない★（2026-08-10 実測）。
+     nomiya-ui-kami.js の紙のCSS `.xl-img{position:absolute;z-index:2;}` が後から
+     入るので、そちらが勝つ。ここだけ 0 にしても ★何も起きない★。
+     直す時は両方。見張りは own-template-xlsx.spec.js の
+     「判子が、はみ出した文字の下に潜らない」 */
+  z-index: 2;
+}
+.xl-grid {
+  border-collapse: collapse;
+  table-layout: fixed;
+  background: var(--c-card);
+  color: var(--c-text);
+  font-family: "Noto Sans JP", sans-serif;
+  font-size: 12px;
+}
+.xl-grid td {
+  height: 20px;
+  padding: 1px 4px;
+  border: 0; /* 罫線はExcelから読んだ物だけを付ける（勝手な線を足さない） */
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: clip; /* Excelは「…」を出さない。隣が空なら はみ出して見える */
+  vertical-align: middle;
+}
+/* 割り当て済みのマス */
+.xl-grid td.xl-set {
+  background: var(--c-tint) !important;
+  outline: 2px solid var(--c-accent);
+  outline-offset: -2px;
+}
+.xl-tag {
+  display: block;
+  font-size: 9px;
+  line-height: 1.1;
+  color: var(--c-accent);
+  font-weight: 700;
+}
+.xl-ref {
+  font-weight: 700;
+  opacity: 0.8;
+}
+/* まだ決まっていない物を ★言葉でも★ 出す（色だけでは伝わらない） */
+.xl-non {
+  font-style: normal;
+  font-size: 11px;
+  opacity: 0.55;
+}
+/* 言葉のボタンを束ねる（18個をいっぺんに並べない） */
+.xl-grp {
+  margin: 10px 0 2px;
+}
+.xl-grp-t,
+.xl-grp > summary {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--c-label);
+  margin-bottom: 4px;
+}
+.xl-grp > summary {
+  cursor: pointer;
+  list-style: none;
+  padding: 6px 0;
+}
+.xl-grp > summary::-webkit-details-marker {
+  display: none;
+}
+.xl-grp > summary::before {
+  content: "▸ ";
+}
+.xl-grp[open] > summary::before {
+  content: "▾ ";
+}
+.chip.sel {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 1px;
+}
+/* 紙(A4)の中に、Excelの表を縮めて収める */
+.iv-xl {
+  padding: 20px;
+  background: var(--c-card);
+  overflow: hidden;
+}
+.xl-fit {
+  transform-origin: top left;
+}
+.iv-xl .xl-grid td {
+  border-color: transparent; /* 紙では目盛線を出さない（Excelの印刷と同じ） */
 }
