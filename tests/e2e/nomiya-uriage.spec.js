@@ -4071,6 +4071,8 @@ test.describe("⑨ 渡す・消すでレジが合わなくならない", () => {
     await setPayDay(page, "2026-08-05");
     await page.locator("#payDayList .li").click();
     await page.locator("#wk_del").click();
+    // ★2026-08-28：出勤にも 消す前の確かめが付いた（指示役 裁定1）
+    await page.locator("#mdYes").click();
     await setCloseDay(page, "2026-08-05");
     await expect(page.locator("#clOut")).toHaveText("¥0");
     await expect(page.locator("#clOuts")).not.toContainText("あかり");
@@ -4273,6 +4275,8 @@ test.describe("⑩ 消す", () => {
     await expect(page.locator("#clOut")).toHaveText("−¥3,000");
     await page.locator("#clOuts .li").click();
     await page.locator("#outDel").click();
+    // ★2026-08-28：出金にも 消す前の確かめが付いた（指示役 裁定1）
+    await page.locator("#mdYes").click();
     await expect(page.locator("#clOut")).toHaveText("¥0");
     await expect(page.locator("#clOuts")).not.toContainText("氷を買った");
     expect(errors, `pageerror: ${errors.join(" | ")}`).toEqual([]);
@@ -6235,10 +6239,20 @@ test.describe("㉕ 画面の一番上に空白を作らない（ホーム画面�
       await goto(page, s);
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.waitForTimeout(50);
-      const top = await page.evaluate(() =>
-        Math.round(document.querySelector(".app-header").getBoundingClientRect().top)
+      /* ★2026-08-28：テスト環境の帯が付いた★
+         帯は画面の一番上に固定するので、ヘッダーは ★帯の真下★ に来るのが正しい。
+         見るのは「上に空白が無いか」＝★帯の下端とヘッダーの上端が一致するか★。
+         本番には帯が出ない（env:"prod"）ので、そのときは 0 と比べる＝同じ1本で両方 見られる。 */
+      const m = await page.evaluate(() => {
+        const bar = document.getElementById("envbar");
+        return {
+          barBottom: bar ? Math.round(bar.getBoundingClientRect().bottom) : 0,
+          top: Math.round(document.querySelector(".app-header").getBoundingClientRect().top),
+        };
+      });
+      expect(m.top, `「${s}」でヘッダーの上に空白がある（帯の下端=${m.barBottom}）`).toBe(
+        m.barBottom
       );
-      expect(top, `「${s}」でヘッダーの上に空白がある`).toBe(0);
     }
     expect(errors, `pageerror: ${errors.join(" | ")}`).toEqual([]);
   });
@@ -6298,6 +6312,9 @@ test.describe("㉖ 監査で見つけた分", () => {
       receipt: false,
     });
     await goto(page, "sum");
+    // ★2026-09-02：集計は「今月」を見る。種まきは 2026-08-01 なので 期間を合わせる
+    //   （合わせないと 9月に入った瞬間 0行になり「10桁の金額が表に出ていない」で赤）
+    await setPeriod(page, "2026-08-01", "2026-08-31");
     await page.waitForTimeout(300);
     // 表のマスは隣どうしくっついているので、見た目のすき間＝金額の右の余白。
     // 「溢れていない」＋「右の余白がある」の2つで、数字が割合に重ならないことを保証する。
