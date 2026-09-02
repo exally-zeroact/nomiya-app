@@ -7,6 +7,9 @@
  *   （payslip-app / payslip-app-test と同じやり方）
  */
 window.SUPA = {
+  /* ★この配信の名札★（テスト環境の帯は これだけを見て出す・ホスト名では決めない）
+     ★本番は "prod"＝帯は出ない★。テスト線の supa-config.js は "test"。 */
+  env: "prod",
   url: "https://tnfwipbgfgjaymlszeid.supabase.co",
   key: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRuZndpcGJnZmdqYXltbHN6ZWlkIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODE1Nzk4MzQsImV4cCI6MjA5NzE1NTgzNH0.zhKPLSlW4zxsdjsXNvqDHvtP3wBqp-EKaxbjqLGW_ek",
 };
